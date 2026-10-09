@@ -108,6 +108,7 @@ export function buildExecutionPrompt({dispatch,workspace,sourceDigest}){
       'For every Markdown artifact use the pinned required sections and source/requirement ids. Preserve real questions and assumptions. Questions awaiting operator policy are not answers supplied by the model.',
       context.learning_diary?`${context.learning_protocol} Diary: ${context.learning_diary}`:'Learning ritual is off or this is a revision.',
       `Task: ${context.task??''}`,`Actual required output paths: ${JSON.stringify(targets)}`,
+      context.testing_contract_rendered?`Host-resolved authoritative testing posture for this bound scope. Use the exact block in the code-generation plan; preserve it unchanged. Policy evidence: ${JSON.stringify(context.testing_policy_basis)}\n${context.testing_contract_rendered}`:'',
       `Selected profile defaults: ${JSON.stringify(context.defaults??{})}`,`Pinned procedure: ${dispatch.procedure??stage.procedure??''}`,`Role knowledge: ${persona}`
     ]};
 }

@@ -5,6 +5,7 @@ import { digest } from './compile.mjs';
 import { readArtifact } from './artifacts.mjs';
 import { snapshotWorkspace } from './runtime.mjs';
 import { buildExecutionPrompt, observeOutputs } from './authority.mjs';
+import {stampTestingPlan} from './testing-posture.mjs';
 
 const json=file=>JSON.parse(fs.readFileSync(file,'utf8'));
 const put=(file,value)=>{fs.mkdirSync(path.dirname(file),{recursive:true,mode:0o700});fs.writeFileSync(file,JSON.stringify(value,null,2)+'\n',{flag:'wx',mode:0o600});};
@@ -87,9 +88,20 @@ export function createDockerExecutor({request,controllerRoot,workerRunner,signal
       // private fork for host diagnostics, but publish none of a worker's
       // known-failed source or artifact bytes to the canonical workspace.
       if(response.status!=='completed')return {status:'failed',identity,identity_basis:'executor-observed',receipt,input_basis:dispatch.basis,artifacts:[],observation};
+      if(dispatch.context.planning_only&&dispatch.context.testing_contract){
+        const transforms=[];
+        for(const target of targets.filter(ref=>ref.id==='code-generation-plan')){
+          const prior=readArtifact(fork,target.path);if(!prior.text.trim())throw new Error('Code generation plan is empty before host contract rendering');
+          const stamped=stampTestingPlan(prior.text,{contract:dispatch.context.testing_contract,rendered:dispatch.context.testing_contract_rendered});
+          if(stamped!==prior.text){fs.writeFileSync(path.join(fork,target.path),stamped);transforms.push({path:target.path,before:prior.digest,after:readArtifact(fork,target.path).digest,contract_digest:dispatch.context.testing_contract.contract_sha256});}
+        }
+        if(transforms.length){observation.host_testing_contract_rendering=transforms;receipt.digest=digest(observation);}
+      }
       const after=snapshotWorkspace(fork);const prior=new Map(before.files.map(file=>[file.path,file]));const next=new Map(after.files.map(file=>[file.path,file]));
       const changed=[...new Set([...prior.keys(),...next.keys()])].filter(file=>prior.get(file)?.digest!==next.get(file)?.digest);
       if(changed.length&&!prompt.allowed_source_changes)throw new Error('Worker changed source outside stage authority');
+      const policyPaths=(dispatch.context.testing_policy_basis?.sources??[]).map(source=>source.path);
+      if(changed.some(file=>policyPaths.includes(file)))throw new Error('Worker changed host-bound Testing Posture policy; source publication refused');
       // Real units that declare explicit resource scopes are confined to them;
       // 'source/workspace'/'*' retain scheduler-serialized workspace custody,
       // and the 'stage' pseudo-unit is governed by stage-level write authority.

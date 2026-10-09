@@ -38,7 +38,7 @@ test('an undispositioned advisory review holds the run as waiting, not failed',a
   assert.equal(result.status,'waiting');assert.equal(result.failure.stage,'requirements-analysis');assert.equal(result.failure.reason,'advisory_review');
   }finally{fs.rmSync(f.root,{recursive:true,force:true});}});
 
-test('a masked planned test command fails the build-and-test gate without aborting the adapter',async()=>{const f=fixture();try{
+test('a masked planned test command refuses code-plan approval before implementation',async()=>{const f=fixture();try{
   const snap=readSnapshot();const keep=new Set(['workspace-scaffold','workspace-detection','state-init','requirements-analysis','code-generation','build-and-test']);const request={run_id:'runtime-masked-command-fixture',workspace:f.workspace,prompt:'Fix fixture defect.',parameters:{profile:'bugfix',project_type:'brownfield',repair_checks:false,stage_decisions:snap.profiles.bugfix.stages.filter(s=>!keep.has(s)).map(stage=>({stage,execute:false,reason:'Synthetic boundary fixture'}))}};
   fs.writeFileSync(path.join(f.workspace,'records.mjs'),'export const answer=1;\n');
   const content=target=>{
@@ -50,9 +50,9 @@ test('a masked planned test command fails the build-and-test gate without aborti
   const authority=createControllerAuthority({policy:{reference:'synthetic-test-only',purposes:['stage-selection','code-plan','review-disposition']},requestDigest:digest(request),controllerRoot:f.controllerRoot});const identities=new Map();
   const executor={async admit(req){const id=randomUUID(),identity={actor:{runtime:'node-fixture',session_id:id,host:'isolated-test-host'},instance_id:id};identities.set(req.request_digest,identity);return identity;},async snapshotBasis({artifacts=[]}){return {source_digest:snapshotWorkspace(f.workspace).source_digest,artifacts:artifacts.map(a=>({path:a.path,digest:digest(fs.readFileSync(path.join(f.workspace,a.path)))}))};},async execute(req){if(req.phase==='review')return {status:'completed',identity:identities.get(req.request_digest),identity_basis:'executor-observed',receipt:{id:'review-'+randomUUID(),digest:digest('review'),request_digest:req.request_digest},input_basis:req.basis,basis:req.basis,artifacts:[],verdict:'ready',findings:[]};for(const target of req.context.artifact_targets){fs.mkdirSync(path.dirname(path.join(f.workspace,target.path)),{recursive:true});fs.writeFileSync(path.join(f.workspace,target.path),content(target));}return {status:'completed',identity:identities.get(req.request_digest),identity_basis:'executor-observed',receipt:{id:'masked-'+randomUUID(),digest:digest('masked'),request_digest:req.request_digest},input_basis:req.basis,artifacts:req.context.artifact_targets.map(a=>({path:a.path,digest:digest(fs.readFileSync(path.join(f.workspace,a.path)))}))};}};
   const result=await runAidlc({request,executor,authority,controllerRoot:f.controllerRoot});
-  assert.equal(result.status,'failed');assert.equal(result.failure.reason,'required_checks_failed');assert.equal(result.failure.stage,'build-and-test');
-  const record=result.records.find(r=>r.stage==='build-and-test');assert.ok(record);assert.equal(record.sensors.status,'fail');
-  assert.match(record.sensors.checks.find(check=>check.id==='planned-unit-tests').findings[0],/cannot be safely executed/);
+  assert.equal(result.status,'failed');assert.equal(result.failure.reason,'testing_plan_invalid');assert.equal(result.failure.stage,'code-generation');
+  assert.match(result.failure.detail.message,/shell|single|command|operator/i);
+  assert.equal(result.records.some(record=>record.stage==='build-and-test'),false);
   }finally{fs.rmSync(f.root,{recursive:true,force:true});}});
 
 test('actual canonical Flow invalidates artifact consumers after completion, with unchanged branch preserved',async()=>{

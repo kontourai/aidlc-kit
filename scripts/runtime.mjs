@@ -13,6 +13,7 @@ import { plannedTestCommands } from './commands.mjs';
 import { snapshotWorkspace } from './workspace.mjs';
 import { resolveCeremony, effectiveStage, summaryTargets } from './ceremony.mjs';
 import { constructionBlock, executeConstruction } from './construction.mjs';
+import {resolveTestingContract,assertTestingPolicyCurrent,validateTestingPlans,stampTestingPlan} from './testing-posture.mjs';
 
 const safeId = value => typeof value === 'string' && /^[a-z0-9][a-z0-9._-]{0,127}$/.test(value);
 const inside = (root, file) => { const rel=path.relative(root,file);return rel!== '..'&&!rel.startsWith(`..${path.sep}`)&&!path.isAbsolute(rel); };
@@ -100,6 +101,7 @@ export async function runAidlc({request,executor,commandRunner,authority,control
   if(!defaults)throw new Error('Unknown profile');
   const settings=resolveCeremony(defaults,request.parameters?.ceremony??{});
   const projectType=request.parameters?.project_type??'brownfield';const omitted=new Set();
+  const testingInput={workspace,request,snapshot,profile},testing=resolveTestingContract(testingInput);
   if(executionSlice){
     if(!Array.isArray(executionSlice.stageIds)||!executionSlice.stageIds.length||executionSlice.stageIds.some(id=>!snapshot.profiles[profile].stages.includes(id)))throw new Error('Invalid host execution slice');
     for(const id of snapshot.profiles[profile].stages)if(!executionSlice.stageIds.includes(id))omitted.add(id);
@@ -108,7 +110,7 @@ export async function runAidlc({request,executor,commandRunner,authority,control
     const input={purpose:'stage-selection',stage:decision.stage,decision,request_digest:requestBindingDigest(request)};const grant=await authority?.authorize?.(input);
     if(!grant?.authorized||!grant.reference||authority.verify?.(grant.receipt,input)!==true)throw new Error('Stage selection needs verified host authority');omitted.add(decision.stage);}
   const {flow,stageIds,selectedSnapshot}=boundDefinition(snapshot,profile,request.run_id,projectType,omitted,settings);
-  const bindingFile=path.join(controllerRoot,'binding.json');const binding={request_digest:requestBindingDigest(request),definition_digest:digest(flow),profile,project_type:projectType,upstream_commit:snapshot.upstream.commit};
+  const bindingFile=path.join(controllerRoot,'binding.json');const binding={request_digest:requestBindingDigest(request),definition_digest:digest(flow),profile,project_type:projectType,upstream_commit:snapshot.upstream.commit,testing_policy_digest:testing.policy_digest,testing_contract_digest:testing.contract_digest};
   if(fs.existsSync(bindingFile)){if(JSON.stringify(json(bindingFile))!==JSON.stringify(binding))throw new Error('Resume input or definition changed');}
   else{write(bindingFile,binding);const definitionFile=path.join(controllerRoot,'definition.json');write(definitionFile,flow);await startRun(definitionFile,{cwd:controllerRoot,runId:request.run_id,params:{subject:request.run_id}});}
   fs.mkdirSync(path.join(workspace,'.aidlc'),{recursive:true});fs.writeFileSync(path.join(workspace,'.aidlc/project-description.json'),JSON.stringify(request.prompt)+'\n');
@@ -172,8 +174,8 @@ export async function runAidlc({request,executor,commandRunner,authority,control
     if(stage.for_each&&!units){delete stage.for_each;}
     const allArtifacts=[...(executionSlice?.initialArtifacts??[]),...records.filter(record=>!record.invalidated).flatMap(record=>record.artifacts??[])];let artifacts=artifactPaths(stage);
     if(stage.for_each)artifacts=units.flatMap(unit=>artifactPaths(stage,unit.id));
-    fs.writeFileSync(path.join(workspace,'.aidlc/state.md'),`# AI-DLC State\n\n## Project\n- **Project**: ${request.prompt.replace(/\n/g,' ')}\n- **Project Description Source**: project-description.json\n- **Scope**: ${defaults.scope??profile}\n- **Profile**: ${profile}\n- **Depth**: ${defaults.depth??'unspecified'}\n- **Current Stage**: ${stageId}\n`);
-    const context={shared:{task:request.prompt,profile,defaults:settings,workspace:'/workspace',stage,artifact_targets:artifacts,upstream_artifacts:allArtifacts,permissions:request.parameters?.permissions??{},plan_approval:'unapproved',prior_check_failures:records.find(record=>record.stage===stageId)?.sensors?.checks??[]},units:{}};
+    fs.writeFileSync(path.join(workspace,'.aidlc/state.md'),`# AI-DLC State\n\n## Project\n- **Project**: ${request.prompt.replace(/\n/g,' ')}\n- **Project Description Source**: project-description.json\n- **Scope**: ${testing.contract.scope}\n- **Profile**: ${profile}\n- **Depth**: ${defaults.depth??'unspecified'}\n- **Test Strategy**: ${testing.contract.test_strategy}\n- **Project Type**: ${projectType}\n- **Current Stage**: ${stageId}\n`);
+    const context={shared:{task:request.prompt,profile,defaults:settings,testing_contract:testing.contract,testing_contract_rendered:testing.rendered,testing_policy_basis:testing.policy_basis,workspace:'/workspace',stage,artifact_targets:artifacts,upstream_artifacts:allArtifacts,permissions:request.parameters?.permissions??{},plan_approval:'unapproved',prior_check_failures:records.find(record=>record.stage===stageId)?.sensors?.checks??[]},units:{}};
     if(settings.learnings==='on'&&!records.some(record=>record.stage===stageId)){
       const diaries=(stage.for_each?units:[{id:'stage'}]).map(unit=>({id:'memory',stage:stageId,unit:unit.id==='stage'?null:unit.id,path:`.aidlc/artifacts/${stageId}${unit.id==='stage'?'':`/${unit.id}`}/memory.md`}));
       for(const diary of diaries){fs.mkdirSync(path.dirname(path.join(workspace,diary.path)),{recursive:true});if(!fs.existsSync(path.join(workspace,diary.path)))fs.writeFileSync(path.join(workspace,diary.path),'# Stage Learnings\n\n## Observations\n\n## Decisions\n\n## Follow-up\n');}
@@ -206,17 +208,36 @@ export async function runAidlc({request,executor,commandRunner,authority,control
         if(!grant?.authorized||authority.verify?.(grant.receipt,input)!==true){failure={stage:stageId,reason:'authority_required',detail:grant};await refuse(stageId,failure);break;}
         context.shared.approved_summary_basis=basis;context.shared.summary_authority_reference=grant.reference;
       }
-      if(stageId==='code-generation'&&settings.plan_approval==='on'){
+      if(stageId==='code-generation'){
+        assertTestingPolicyCurrent(testing,testingInput);
         const planning={...stage,workspace_requires:false,reviewer:undefined,for_each:stage.for_each,produces:['code-generation-plan','unit-test-instructions'],optional_produces:[]};
         const planningContext=structuredClone(context);planningContext.shared.planning_only=true;planningContext.shared.artifact_targets=artifacts.filter(a=>['code-generation-plan','unit-test-instructions'].includes(a.id));
         for(const unitContext of Object.values(planningContext.units))unitContext.artifact_targets=unitContext.artifact_targets.filter(a=>['code-generation-plan','unit-test-instructions'].includes(a.id));
-        const planned=await dispatchStage({stage:planning,units:stage.for_each?units:undefined,executor,context:planningContext,policy:request.parameters?.dispatch_policy??{},signal});executions.push(...planned.units.flatMap(u=>u.receipts??[]));
+        const planningExecutor={...executor,async execute(dispatch){
+          const result=await executor.execute({...dispatch,beforePublication:async()=>{await dispatch.beforePublication?.();assertTestingPolicyCurrent(testing,testingInput);}});
+          if(result.status!=='completed'||['review','contribute','dialogue'].includes(dispatch.phase))return result;
+          const transforms=[];
+          for(const plan of dispatch.context.artifact_targets.filter(ref=>ref.id==='code-generation-plan')){
+            const prior=readArtifact(workspace,plan.path);if(!prior.text.trim())throw new Error('Code generation plan is empty before host contract rendering');
+            const stamped=stampTestingPlan(prior.text,testing);if(stamped!==prior.text){fs.writeFileSync(path.join(workspace,plan.path),stamped);transforms.push({path:plan.path,before:prior.digest,after:readArtifact(workspace,plan.path).digest,contract_digest:testing.contract_digest});}
+          }
+          if(!transforms.length)return result;
+          const observation={...(result.observation??{worker_receipt:result.receipt}),host_testing_contract_rendering:transforms};
+          return {...result,observation,worker_receipt:result.receipt,receipt:{...result.receipt,digest:digest(observation)},host_testing_contract_rendering:transforms,artifacts:result.artifacts.map(ref=>({...ref,digest:readArtifact(workspace,ref.path).digest}))};
+        }};
+        const planned=await dispatchStage({stage:planning,units:stage.for_each?units:undefined,executor:planningExecutor,context:planningContext,policy:request.parameters?.dispatch_policy??{},signal});executions.push(...planned.units.flatMap(u=>u.receipts??[]));
         if(planned.status!=='completed'){failure={stage:stageId,reason:'plan_failed',detail:planned};await refuse(stageId,failure);break;}
         const expected=artifacts.filter(a=>['code-generation-plan','unit-test-instructions'].includes(a.id));
         const basis=currentRefs(workspace,expected);
         if(basis.length!==expected.length||basis.some(ref=>!readArtifact(workspace,ref.path).text.trim())){failure={stage:stageId,reason:'approval_basis_incomplete'};await refuse(stageId,failure);break;}
-        const input={purpose:'code-plan',stage:stageId,basis,source_digest:snapshotWorkspace(workspace).source_digest,request_digest:binding.request_digest};const grant=await authority?.authorize?.(input);
-        if(!grant?.authorized||authority.verify?.(grant.receipt,input)!==true){failure={stage:stageId,reason:'authority_required',detail:grant};await refuse(stageId,failure);break;}
+        assertTestingPolicyCurrent(testing,testingInput);
+        let testingBasis;
+        try{testingBasis=validateTestingPlans({workspace,plans:expected.filter(ref=>ref.id==='code-generation-plan'),instructions:expected.filter(ref=>ref.id==='unit-test-instructions'),resolved:testing,sourceDigest:snapshotWorkspace(workspace).source_digest,commandParser:plannedTestCommands});}
+        catch(error){failure={stage:stageId,reason:'testing_plan_invalid',detail:{message:error.message}};await refuse(stageId,failure);break;}
+        context.shared.testing_approval_basis=testingBasis;
+        const input={purpose:'code-plan',stage:stageId,basis,testing_basis:testingBasis,source_digest:snapshotWorkspace(workspace).source_digest,request_digest:binding.request_digest};const grant=settings.plan_approval==='on'?await authority?.authorize?.(input):{authorized:true,reference:'registered-plan-approval-off'};
+        if(!grant?.authorized||settings.plan_approval==='on'&&authority.verify?.(grant.receipt,input)!==true){failure={stage:stageId,reason:'authority_required',detail:grant};await refuse(stageId,failure);break;}
+        assertTestingPolicyCurrent(testing,testingInput);
         context.shared.plan_approval='approved';context.shared.approved_plan_basis=basis;context.shared.authority_reference=grant.reference;
       }
       if(stage.phase==='operation'){
@@ -231,8 +252,8 @@ export async function runAidlc({request,executor,commandRunner,authority,control
       }
       let unitFlow;
       try{
-        let stageExecutor=executor;
-        if(stage.for_each){unitFlow=await createUnitFlow({controllerRoot,parentRunId:request.run_id,stage,units,snapshotBasis:executor.snapshotBasis});stageExecutor=unitFlow.bindExecutor(executor);}
+        let stageExecutor={...executor,async execute(dispatch){return executor.execute({...dispatch,beforePublication:async()=>{await dispatch.beforePublication?.();assertTestingPolicyCurrent(testing,testingInput);}});}};
+        if(stage.for_each){unitFlow=await createUnitFlow({controllerRoot,parentRunId:request.run_id,stage,units,snapshotBasis:executor.snapshotBasis});stageExecutor=unitFlow.bindExecutor(stageExecutor);}
         const historicalFile=unitFlow?path.join(controllerRoot,'unit-dispatch',`${unitFlow.runId}.json`):null;
         if(historicalFile&&fs.existsSync(historicalFile)){
           const saved=json(historicalFile);const canonical=await unitFlow.load();
@@ -259,6 +280,7 @@ export async function runAidlc({request,executor,commandRunner,authority,control
       }
       if(dispatched.status!=='completed'){failure={stage:stageId,reason:dispatched.reason==='execution_budget'||dispatched.reason==='storage_budget'?'budget_exhausted':dispatched.reason??dispatched.status,detail:dispatched};await refuse(stageId,failure);break;}
       if(context.shared.approved_summary_basis?.some(ref=>readArtifact(workspace,ref.path).digest!==ref.digest)){failure={stage:stageId,reason:'approved_summary_changed'};await refuse(stageId,failure);break;}
+      assertTestingPolicyCurrent(testing,testingInput);
       if(context.shared.approved_plan_basis?.some(ref=>readArtifact(workspace,ref.path).digest!==ref.digest)){failure={stage:stageId,reason:'approved_plan_changed'};await refuse(stageId,failure);break;}
     }
     const resolved=currentRefs(workspace,artifacts);
