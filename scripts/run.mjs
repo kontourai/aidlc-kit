@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {randomUUID} from 'node:crypto';
+import {isIP} from 'node:net';
 import { pathToFileURL,fileURLToPath } from 'node:url';
 import { createDockerExecutor } from './executor.mjs';
 import { createControllerAuthority } from './authority.mjs';
@@ -62,6 +63,8 @@ export async function executeRequestFile({requestFile,controllerRoot,authFile,wo
   controllerRoot=privateController(request.workspace,controllerRoot);
   const config=request.engine_sandbox;
   if(!config?.image)throw new Error('Explicit immutable worker image required');
+  const brokerConfig=config.provider_broker??{};
+  if(!brokerConfig||typeof brokerConfig!=='object'||Array.isArray(brokerConfig)||Object.keys(brokerConfig).some(key=>!['bind_host','port'].includes(key))||brokerConfig.bind_host!==undefined&&!isIP(brokerConfig.bind_host)||brokerConfig.port!==undefined&&(!Number.isSafeInteger(brokerConfig.port)||brokerConfig.port<0||brokerConfig.port>65535))throw new Error('Provider broker requires explicit IP bind_host and bounded port');
   const limit=request.execution?.max_provider_requests;
   if(!Number.isSafeInteger(limit)||limit<1||limit>8192)throw new Error('Bounded provider request count required');
   config.owner_id=executionOwner;
@@ -84,7 +87,7 @@ export async function executeRequestFile({requestFile,controllerRoot,authFile,wo
       const initializeLedger=!fs.existsSync(admissionFile);
       if(initializeLedger)fs.writeFileSync(admissionFile,JSON.stringify({request_digest:requestDigest})+'\n',{flag:'wx',mode:0o600});
       else if(JSON.parse(fs.readFileSync(admissionFile,'utf8')).request_digest!==requestDigest)throw new Error('Provider admission binding changed');
-      broker=await brokerFactory({authFile,model:request.execution.model,reasoningEffort:request.execution.reasoning_effort,maxRequests:request.execution.max_provider_requests,ledgerFile:path.join(controllerRoot,'provider-budget.json'),requestBindingDigest:requestDigest,initializeLedger});
+      broker=await brokerFactory({authFile,model:request.execution.model,reasoningEffort:request.execution.reasoning_effort,maxRequests:request.execution.max_provider_requests,...(brokerConfig.bind_host!==undefined?{bindHost:brokerConfig.bind_host}:{}),...(brokerConfig.port!==undefined?{port:brokerConfig.port}:{}),ledgerFile:path.join(controllerRoot,'provider-budget.json'),requestBindingDigest:requestDigest,initializeLedger});
       config.providerProxy={baseUrl:broker.baseUrl,capability:broker.capability,model:broker.model};
     }
     return await executeKit({request,controllerRoot,workerRunner,signal});
