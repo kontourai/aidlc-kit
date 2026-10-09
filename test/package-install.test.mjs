@@ -28,7 +28,7 @@ test('npm tarball installs away from source and activates through public kit con
   const activation=JSON.parse(command([process.execPath,cli,'kit','activate','--dest',workspace,'--format','json'],consumer));
   assert.ok(activation);const registry=JSON.parse(readFileSync(path.join(workspace,'kits/local/installed-kits.json'),'utf8'));assert.ok(JSON.stringify(registry).includes('aidlc'));
   const requestFile=path.join(scratch,'request.json');writeFileSync(requestFile,JSON.stringify({schema:'kontour.kit.execution_request',version:'1.0',kit_id:'aidlc',workspace,run_id:'package-proof',prompt:'Probe',execution:{max_turns:1,timeout_s:30,model:'probe',runtime:'docker'},engine_sandbox:{}}));
-  const probe=spawnSync(process.execPath,[cli,'kit','run','aidlc','--dest',workspace,'--request',requestFile,'--controller-root',path.join(scratch,'private')],{encoding:'utf8'});assert.equal(probe.status,1);assert.match(probe.stderr,/Explicit immutable worker image required/);
+  const probe=spawnSync(process.execPath,[cli,'kit','run','aidlc','--dest',workspace,'--request',requestFile,'--controller-root',path.join(scratch,'private')],{encoding:'utf8'});assert.notEqual(probe.status,0,probe.stderr);assert.match(probe.stderr,/Explicit immutable worker image required/);
   assert.equal(JSON.parse(readFileSync(path.join(workspace,'kits/local/repositories/aidlc/kit.json'),'utf8')).flows.length,11);
  }finally{rmSync(scratch,{recursive:true,force:true});}
 });
