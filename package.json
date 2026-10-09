@@ -1,0 +1,45 @@
+{
+  "name": "@kontourai/aidlc-kit",
+  "version": "0.1.0",
+  "description": "AI-DLC methodology as a portable Flow Agents kit",
+  "type": "module",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kontourai/aidlc-kit.git"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "files": [
+    "kit.json",
+    "flows/",
+    "skills/",
+    "docs/",
+    "scripts/",
+    "evals/",
+    "upstream/",
+    "README.md",
+    "LICENSE"
+  ],
+  "exports": {
+    ".": "./scripts/runtime.mjs",
+    "./kit.json": "./kit.json",
+    "./run": "./scripts/run.mjs",
+    "./executor": "./scripts/executor.mjs",
+    "./compile": "./scripts/compile.mjs"
+  },
+  "dependencies": {
+    "@kontourai/flow": "5.1.4",
+    "@kontourai/surface": "5.0.0",
+    "@kontourai/flow-agents": "6.5.2"
+  },
+  "scripts": {
+    "test": "node --test evals/*.test.mjs",
+    "check": "node scripts/compile.mjs --check && node scripts/compare.mjs method && node evals/public-flow-conformance.mjs",
+    "test:package": "node --test test/package-install.test.mjs"
+  },
+  "bin": {
+    "aidlc": "scripts/cli.mjs"
+  }
+}
