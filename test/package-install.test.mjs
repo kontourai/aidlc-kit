@@ -13,7 +13,8 @@ test('npm tarball installs away from source and activates through public kit con
   const packed=JSON.parse(command(['npm','pack','--ignore-scripts','--json','--pack-destination',scratch],root))[0];
   const tarball=path.join(scratch,packed.filename);const consumer=path.join(scratch,'consumer');mkdirSync(consumer);
   writeFileSync(path.join(consumer,'package.json'),JSON.stringify({name:'clean-consumer',private:true,type:'module'}));
-  const engine=process.env.FLOW_AGENTS_PACKAGE??'@kontourai/flow-agents@6.5.2';
+  const runtimeVersion=JSON.parse(readFileSync(path.join(root,'package.json'),'utf8')).dependencies['@kontourai/flow-agents'];
+  const engine=process.env.FLOW_AGENTS_PACKAGE??`@kontourai/flow-agents@${runtimeVersion}`;
   command(['npm','install','--ignore-scripts','--prefer-offline','--no-audit','--no-fund','--package-lock=false',tarball,engine],consumer);
   const kit=path.join(consumer,'node_modules/@kontourai/aidlc-kit');assert.equal(lstatSync(kit).isSymbolicLink(),false);
   const manifest=JSON.parse(readFileSync(path.join(kit,'package.json'),'utf8'));
