@@ -24,7 +24,8 @@
   "shared_worker_budgets": "host-ledger-enforced",
   "judgment_dissent_disposition": "operator-policy-required-with-audit-input",
   "unit_source_custody": "manifest-scoped-publication-jail",
-  "native_ceremony_settings": "validated-review-sensor-summary-plan-collaborator-learning-and-skeleton-composition"
+  "native_ceremony_settings": "validated-review-sensor-summary-plan-collaborator-learning-and-skeleton-composition",
+  "construction_checkpoints": "selected-source-units-default-serial-unit-major-authenticated-command-and-per-unit-authority-component-tested"
  },
  "comparison": {
   "profile_structure": "implemented",

@@ -20,6 +20,7 @@ export function createControllerAuthority({policy,requestDigest,controllerRoot})
   const port={kind:'trusted-host-policy',fingerprint,
     async authorize(input){
       if(input.request_digest!==requestDigest||!policy.purposes.includes(input.purpose)||input.purpose==='deployment'&&policy.deployment!==true)return {authorized:false,reason:'outside_registered_policy'};
+      if(input.purpose==='construction-verification-command'&&input.command===null)return {authorized:false,reason:'verification_command_required'};
       if(['input-confirmation','summary-confirmation'].includes(input.purpose)){
         const confirmation=(input.purpose==='summary-confirmation'?policy.summary_confirmations:policy.input_confirmations)?.[input.stage];
         if(!confirmation?.reference||confirmation.source!=='operator-supplied'||!Array.isArray(confirmation.basis)||digest(confirmation.basis)!==digest(input.basis))return {authorized:false,reason:'exact_operator_input_confirmation_required'};
@@ -71,7 +72,7 @@ export function decisionBindingDigest(input){
   return digest(bound);
 }
 
-const DECISION_PURPOSES=['stage-selection','source-change','summary-confirmation','input-confirmation','code-plan','skeleton-checkpoint','review-disposition','deployment','operation'];
+const DECISION_PURPOSES=['stage-selection','source-change','summary-confirmation','input-confirmation','code-plan','construction-verification-command','construction-checkpoint','skeleton-checkpoint','review-disposition','deployment','operation'];
 /** Trusted CLI interaction. This observes an operator action, not a human signature. */
 export function recordControllerDecision({controllerRoot,pendingFile,reference,decision='approve',disposition}) {
   if(typeof reference!=='string'||!reference.trim()||reference.length>2048||decision!=='approve')throw new Error('Explicit approval and reference required');
