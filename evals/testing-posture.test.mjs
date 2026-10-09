@@ -75,3 +75,14 @@ test('malformed model contract is refused before any code-plan authority or impl
  const result=await runAidlc({request,executor,authority,controllerRoot});assert.equal(result.status,'failed');assert.equal(result.failure.reason,'plan_failed');assert.equal(authorizations,0);assert.equal(implementations,0);assert.match(result.failure.detail.units[0].error,/JSON malformed/);
  }finally{fs.rmSync(root,{recursive:true,force:true});}
 });
+
+test('worker cannot alter a registered testing policy even in a source-authorized stage',async()=>{
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'aidlc-testing-policy-jail-')),workspace=path.join(root,'source'),controllerRoot=path.join(root,'controller');fs.mkdirSync(workspace);fs.mkdirSync(controllerRoot);
+ try{
+ fs.writeFileSync(path.join(workspace,'testing-policy.md'),'## Testing Posture\nMethodology: tdd\n');
+ const request={run_id:'testing-policy-jail',workspace,source_root:workspace,execution:{model:'test-host',max_turns:2,timeout_s:30},engine_sandbox:{image:`sha256:${'a'.repeat(64)}`,artifact_root:path.join(root,'capture')}};
+ const workerRunner=async input=>{fs.writeFileSync(path.join(input.workspace,'testing-policy.md'),'## Testing Posture\nMethodology: test-after\n');return {observed:{container_id:'test-host-observed',context_digest:digest(fs.readFileSync(input.contextFile)),stdin_digest:digest('fixture'),source_fork_digest:digest('fixture')},provider_thread_id:'actual-policy-jail-port',terminal:{status:0,timeout:false,overflow:false},container_removed:true,usage:{complete:false},final:JSON.stringify({status:'completed',artifacts:[]})};};
+ const executor=createDockerExecutor({request,controllerRoot,workerRunner}),dispatch={request_digest:digest('immutable-dispatch'),stage:'code-generation',role:'aidlc-developer-agent',unit:'stage',phase:'draft',context:{stage:{workspace_requires:true},artifact_targets:[],testing_policy_basis:{sources:[{layer:'project',path:'testing-policy.md'}]}},basis:await executor.snapshotBasis({})};dispatch.expected_identity=await executor.admit(dispatch);
+ await assert.rejects(executor.execute(dispatch),/host-bound Testing Posture policy/);assert.match(fs.readFileSync(path.join(workspace,'testing-policy.md'),'utf8'),/Methodology: tdd/);
+ }finally{fs.rmSync(root,{recursive:true,force:true});}
+});
