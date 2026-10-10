@@ -18,6 +18,8 @@ test('npm tarball installs away from source and activates through public kit con
   command(['npm','install','--ignore-scripts','--prefer-offline','--no-audit','--no-fund','--package-lock=false',tarball,engine],consumer);
   const kit=path.join(consumer,'node_modules/@kontourai/aidlc-kit');assert.equal(lstatSync(kit).isSymbolicLink(),false);
   const manifest=JSON.parse(readFileSync(path.join(kit,'package.json'),'utf8'));
+  assert.deepEqual(manifest.bin,{'kontour-aidlc':'scripts/cli.mjs'});
+  assert.match(command([path.join(consumer,'node_modules/.bin/kontour-aidlc'),'--help'],consumer),/kontour-aidlc profiles/);
   assert.equal(manifest.dependencies['@kontourai/flow'],'5.2.0');assert.equal(manifest.dependencies['@kontourai/surface'],'5.0.0');
   command([process.execPath,'scripts/cli.mjs','profiles'],kit);
   command([process.execPath,'--input-type=module','-e',"await import('@kontourai/flow-agents/docker-worker');await import('@kontourai/flow-agents/provider-broker');"],consumer);

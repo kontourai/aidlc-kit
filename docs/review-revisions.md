@@ -18,7 +18,7 @@ clarification in a private disposition file:
 ```
 
 ```sh
-aidlc decide --controller-root /private/controller \
+kontour-aidlc decide --controller-root /private/controller \
   --pending /private/controller/authority/pending/<digest>.json \
   --reference "Operator requests correction to these current findings" \
   --disposition /private/correction.json
@@ -47,7 +47,7 @@ or one-off replay code are supported.
 A process crash can leave a controller lock. Recovery is explicit:
 
 ```sh
-aidlc recover-controller --controller-root /private/controller
+kontour-aidlc recover-controller --controller-root /private/controller
 ```
 
 Recovery only removes a same-host lock whose recorded process is proven dead.

@@ -40,3 +40,5 @@ For a Linux host with an incoming firewall, configure `engine_sandbox.provider_b
 ```
 
 Use the actual bridge gateway and an available port on your host. Broker transport settings are part of the run binding; changing them starts a new registration rather than reusing prior approvals or provider quota.
+
+For native login, Datum provider references, Docker broker setup, engine qualification and ordinary resume commands, read [Environment setup](docs/environment-setup.md).

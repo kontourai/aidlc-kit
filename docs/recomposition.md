@@ -9,11 +9,11 @@ Use the original request file and the stopped run's private controller directory
 
 ```sh
 # Proposal: {"add":["market-research"],"skip":[],"reason":"Include pending market analysis"}
-aidlc recompose --request original-request.json --controller-root /private/run --proposal pending-delta.json
-aidlc decisions --controller-root /private/run
-aidlc decide --controller-root /private/run --pending /private/run/authority/pending/<digest>.json --reference "Owner approved this exact pending plan"
-aidlc recompose --request original-request.json --controller-root /private/run --proposal pending-delta.json
-aidlc run --request original-request.json --controller-root /private/run --auth-file /private/provider-auth.json
+kontour-aidlc recompose --request original-request.json --controller-root /private/run --proposal pending-delta.json
+kontour-aidlc decisions --controller-root /private/run
+kontour-aidlc decide --controller-root /private/run --pending /private/run/authority/pending/<digest>.json --reference "Owner approved this exact pending plan"
+kontour-aidlc recompose --request original-request.json --controller-root /private/run --proposal pending-delta.json
+kontour-aidlc run --request original-request.json --controller-root /private/run --auth-file /private/provider-auth.json
 ```
 
 Only an actual `decide` interaction may authorize live recomposition. Listing

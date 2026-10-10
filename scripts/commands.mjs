@@ -8,6 +8,7 @@ import {resolveDockerHostIdentity} from '@kontourai/flow-agents/docker-worker';
 import { digest } from './compile.mjs';
 import { readArtifact } from './artifacts.mjs';
 import { snapshotWorkspace } from './runtime.mjs';
+import {createOperationCommandRunner} from './operations.mjs';
 
 function invoke(argv,options={}){const result=spawnSync(argv[0],argv.slice(1),{encoding:'utf8',timeout:options.timeout??30000,maxBuffer:2*1024*1024});if(result.error||result.status!==0)throw new Error(result.error?.message??result.stderr??'Command failed');return result.stdout.trim();}
 function flowCli(){let root=path.dirname(fileURLToPath(import.meta.resolve('@kontourai/flow')));for(let i=0;i<6;i++){try{const manifest=JSON.parse(fs.readFileSync(path.join(root,'package.json'),'utf8'));if(manifest.name==='@kontourai/flow')return path.join(root,manifest.bin.flow);}catch(error){if(error.code!=='ENOENT')throw error;}root=path.dirname(root);}throw new Error('Public Flow CLI unavailable');}
@@ -44,10 +45,19 @@ export function prepareCheckWorkspace({workspace,controllerRoot,basis=[]}){
 }
 
 /** Public Flow capture + isolated source command; no model or grader authority. */
-export function createCommandRunner({workspace,controllerRoot,runId,image,currentStage,ownerId}){
-  return async function commandRunner({id,command,cwd=workspace,timeoutMs=120000,maxOutputBytes=1024*1024,basis=[]}){
+export function createCommandRunner({workspace,controllerRoot,runId,image,currentStage,ownerId,executionProfile='docker',hostAccessGranted=false,signal:runSignal,remainingMs}){
+  return async function commandRunner({id,command,cwd=workspace,timeoutMs=120000,maxOutputBytes=1024*1024,basis=[],signal=runSignal}){
+    if(signal?.aborted)throw new Error('Check execution cancelled');
+    if(remainingMs){const remaining=remainingMs();if(remaining<=0)throw new Error('Run execution budget exhausted');timeoutMs=Math.min(timeoutMs,remaining);}
     const actual=fs.realpathSync(cwd);const relative=path.relative(fs.realpathSync(workspace),actual);if(relative==='..'||relative.startsWith(`..${path.sep}`)||path.isAbsolute(relative))throw new Error('Check cwd escapes source workspace');
-    if(!/^sha256:[a-f0-9]{64}$/.test(image))throw new Error('Immutable check image required');
+    if(executionProfile==='host-native'){
+      if(hostAccessGranted!==true)throw new Error('Explicit native host check authority required');
+      if(typeof command==='string'){if(!command.trim()||command.length>8192)throw new Error('Bounded native check command required');assertSingleTestCommand(command);}
+      const argv=Array.isArray(command)?command:typeof command==='string'?['sh','-lc',command]:null;if(!argv)throw new Error('Native checks require a command');
+      const check=prepareCheckWorkspace({workspace,controllerRoot,basis});
+      try{const result=await createOperationCommandRunner({workspace:path.join(check.workspace,relative),controllerRoot})({command:argv,cwd:path.join(check.workspace,relative),timeoutMs,maxOutputBytes,basis,signal});check.assertCurrent();return {...result,receipt:{...result.receipt,execution_profile:'host-native',isolation:'none',credential_confinement:false,canonical_source_digest:check.before.source_digest,check_input_digest:check.basis_digest,basis}};}finally{check.close();}
+    }
+    if(executionProfile!=='docker'||!/^sha256:[a-f0-9]{64}$/.test(image))throw new Error('Immutable check image required');
     const argv=Array.isArray(command)?command:['sh','-lc',command];if(!argv.length||argv.length>128||!argv.every(arg=>typeof arg==='string'&&arg.length<8192))throw new Error('Invalid check argv');
     const name=`aidlc-check-${randomUUID()}`;let container,check;
     try{

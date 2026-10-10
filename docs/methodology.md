@@ -1,9 +1,15 @@
 # Pinned AI-DLC methodology
 
 The AI-DLC reference kit imports the methodology of
-[AWS AI-DLC Workflows 2.11.0](https://github.com/awslabs/aidlc-workflows/tree/2a555f7a4387cd1b8254029cccb9fd1e99974574)
+[AWS AI-DLC Workflows source](https://github.com/awslabs/aidlc-workflows/tree/2a555f7a4387cd1b8254029cccb9fd1e99974574)
 at commit `2a555f7a4387cd1b8254029cccb9fd1e99974574`. The imported material is licensed
 MIT-0; its original license is retained in `upstream/LICENSE-MIT-0`.
+
+The snapshot retains the source's declared version `2.11.0`. This commit is not
+the published `v2.11.0` tag, which resolves to
+`6a378b53c0a4fe0641ed7d8de8dfff94264d5b6a`. Comparisons with the released native
+binary must disclose this methodology-source difference. Historical pinned
+results remain bound to their original source; they do not qualify the release.
 
 ## Snapshot contract
 

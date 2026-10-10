@@ -40,6 +40,6 @@
     "test:package": "node --test test/package-install.test.mjs"
   },
   "bin": {
-    "aidlc": "scripts/cli.mjs"
+    "kontour-aidlc": "scripts/cli.mjs"
   }
 }

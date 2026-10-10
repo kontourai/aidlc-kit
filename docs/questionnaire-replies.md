@@ -6,12 +6,12 @@ questionnaire document, its stable `answer-N` cells, their headings, and any
 previously confirmed answer cells.
 
 ```sh
-aidlc decisions --controller-root /private/run-controller
-aidlc decide --controller-root /private/run-controller \
+kontour-aidlc decisions --controller-root /private/run-controller
+kontour-aidlc decide --controller-root /private/run-controller \
   --pending /private/run-controller/authority/pending/<digest>.json \
   --reference "Operator answered the exact retained questionnaire" \
   --disposition /private/operator-reply.json
-aidlc run --request /private/original-request.json \
+kontour-aidlc run --request /private/original-request.json \
   --controller-root /private/run-controller --auth-file /private/provider-auth.json
 ```
 

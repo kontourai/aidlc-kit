@@ -82,18 +82,19 @@ export function generatedFiles(snapshot) {
     execution:{module:'scripts/run.mjs',export:'executeRequestFile',contract:'kontour.kit.execution_request@1.0'}, name: 'AI-DLC Reference Kit',
     description: 'Pinned AWS AI-DLC methodology expressed as Kontour flows, with differential conformance and explicit capability gaps.',
     flows: all.map((entry) => ({ id: entry.flow.id, path: `flows/${entry.flow.id.slice(6)}.flow.json`, description: `AI-DLC ${entry.identity.profile} profile; pinned upstream stage selection.` })),
-    skills: snapshot.stages.map((stage) => ({ id: `aidlc.aidlc-${stage.slug}`, path: `skills/aidlc-${stage.slug}/SKILL.md`, description: stage.name })),
-    docs: ['docs/README.md', 'docs/execution.md', 'docs/methodology.md', 'docs/parity.json'].map((path) => ({ path })),
+    skills: [{id:'aidlc.aidlc',path:'skills/aidlc/SKILL.md',description:'Start or resume the installed AI-DLC workflow through Flow Agents'},...snapshot.stages.map((stage) => ({ id: `aidlc.aidlc-${stage.slug}`, path: `skills/aidlc-${stage.slug}/SKILL.md`, description: stage.name }))],
+    docs: ['docs/README.md', 'docs/execution.md', 'docs/environment-setup.md', 'docs/methodology.md', 'docs/parity.json'].map((path) => ({ path })),
     assets: ['upstream/snapshot.json', 'upstream/LICENSE-MIT-0', 'scripts/compile.mjs', 'scripts/artifacts.mjs', 'scripts/compare.mjs', 'scripts/capture-run.mjs', 'evals/corpus.json'].map((path) => ({ path })),
     evals: [{ path: 'evals/public-flow-conformance.mjs' }],
     flow_step_actions: actions,
-    skill_roles: snapshot.stages.map((stage) => {
+    skill_roles: [{skill_id:'aidlc.aidlc',role:'entrypoint',flow_id:'aidlc.classic',step_ids:[],expectation_ids:[],artifacts:[]},...snapshot.stages.map((stage) => {
       const matching = actions.filter((action) => action.step_id === stage.slug);
       return { skill_id: `aidlc.aidlc-${stage.slug}`, role: 'step', flow_id: matching[0]?.flow_id, flow_ids: matching.slice(1).map((action) => action.flow_id),
         step_ids: [stage.slug], expectation_ids: matching[0]?.expectation_ids ?? [], artifacts: matching[0]?.artifacts ?? [] };
-    }),
+    })],
   };
   files.set('kit.json', `${JSON.stringify(manifest, null, 2)}\n`);
+  files.set('skills/aidlc/SKILL.md', `---\nname: aidlc\ndescription: Start or resume AI-DLC using the installed Kontour methodology and Flow Agents runtime.\n---\n\nUse the ordinary Flow Agents CLI to run this installed kit. Read docs/environment-setup.md from the installed kit before configuring execution. Ask the operator to choose a profile and project type; preserve the stock ceremony defaults. Use the engine's native sign-in or an existing Datum provider reference, never request credentials in chat.\n\nCreate the request with flow-agents kit setup aidlc, check it with flow-agents kit doctor, then execute flow-agents kit run aidlc with that request and private controller root. Keep the request unchanged when resuming. The default authority is interactive and grants nothing automatically.\n\nWhen execution waits, show the actual pending subject and findings to the operator. Use the installed kit's scripts/cli.mjs decisions and decide commands to record their explicit answers or disposition, then resume the same request. Never supply an answer, approval, finding waiver, or request for changes on the operator's behalf. Control choices require the exact declared strings.\n\nThe host owns Flow state, signed decisions, source publication and checks. Do not substitute AWS aidlc engine commands or edit controller state. Native harness activation configures discovery; it does not prove a successful workflow or enforce operating-system isolation.\n`);
   for (const entry of all) files.set(`flows/${entry.identity.profile}.flow.json`, `${JSON.stringify(entry.flow, null, 2)}\n`);
   for (const stage of snapshot.stages) files.set(`skills/aidlc-${stage.slug}/SKILL.md`, stageSkill(stage));
   return files;

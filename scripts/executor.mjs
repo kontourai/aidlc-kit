@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { digest } from './compile.mjs';
 import { readArtifact } from './artifacts.mjs';
@@ -14,6 +15,11 @@ const replace=(file,value)=>{const temp=`${file}.${randomUUID()}.tmp`;put(temp,v
 const normalizedResult=text=>{const raw=text?.trim().replace(/^```(?:json)?\s*\n/,'').replace(/\n```$/,'');const value=JSON.parse(raw);if(!value||!['completed','failed'].includes(value.status)||!Array.isArray(value.artifacts)||value.artifacts.length>512)throw new Error('Worker final response violates execution schema');for(const forbidden of ['receipt','identity','authorized','gate_status'])if(Object.hasOwn(value,forbidden))throw new Error(`Model cannot supply ${forbidden}`);return value;};
 const safeRel=(file)=>typeof file==='string'&&file.length>0&&!path.isAbsolute(file)&&!file.split(/[\\/]/).some(p=>p==='..');
 const inside=(root,file)=>{const rel=path.relative(root,file);return rel!=='..'&&!rel.startsWith(`..${path.sep}`)&&!path.isAbsolute(rel);};
+function artifactInventory(workspace){
+  const files=[];let bytes=0;
+  const visit=relative=>{const file=path.join(workspace,relative),stat=fs.lstatSync(file);if(stat.isSymbolicLink())throw new Error('Canonical artifact symlink refused');if(stat.isDirectory()){for(const name of fs.readdirSync(file).sort())visit(path.join(relative,name));return;}const value=readArtifact(workspace,relative);bytes+=value.bytes;if(files.length>=10000||bytes>64*1024*1024)throw new Error('Canonical artifact inventory exceeds budget');files.push({path:relative,digest:value.digest});};
+  if(fs.existsSync(path.join(workspace,'.aidlc')))visit('.aidlc');return digest(files);
+}
 
 /** Host-owned executor. Model messages never become identity or evidence receipts. */
 export function createDockerExecutor({request,controllerRoot,workerRunner,signal}){
@@ -42,12 +48,13 @@ export function createDockerExecutor({request,controllerRoot,workerRunner,signal
   const admitted=new Map();const observed=history.starts.filter(start=>start.worker).map(start=>start.worker);let turns=history.starts.length;const start=history.started_at;let merge=Promise.resolve();
   const budget=()=>{if(signal?.aborted)throw Object.assign(new Error('Execution cancelled'),{code:'cancelled'});if(turns>=request.execution.max_turns||Date.now()-start>=request.execution.timeout_s*1000)throw Object.assign(new Error('Run execution budget exhausted'),{code:'execution_budget'});};
   const executor={
-    get observed(){return observed;},get turnsStarted(){return turns;},get hasUnobservedStarts(){return history.starts.some(attempt=>!attempt.worker);},
+    get maxParallel(){return request.host_setup?.isolation==='trusted-host'?1:16;},
+    get observed(){return observed;},get turnsStarted(){return turns;},get remainingMs(){return Math.max(0,request.execution.timeout_s*1000-(Date.now()-start));},get hasUnobservedStarts(){return history.starts.some(attempt=>!attempt.worker);},
     async admit(dispatch){
       const file=path.join(controllerRoot,'admissions',`${dispatch.request_digest}.json`);
       let identity;
       if(fs.existsSync(file))identity=json(file);
-      else{const id=randomUUID();identity={actor:{runtime:'codex',session_id:id,host:`docker-${config.image.slice(-12)}`},instance_id:id};put(file,identity);}
+      else{const id=randomUUID();identity={actor:{runtime:request.host_setup?.engine??'codex',session_id:id,host:request.host_setup?.isolation==='trusted-host'?`host-${os.hostname()}`:`docker-${config.image.slice(-12)}`},instance_id:id};put(file,identity);}
       admitted.set(dispatch.request_digest,identity);return identity;
     },
     async snapshotBasis({artifacts=[]}){return {source_digest:snapshotWorkspace(workspace).source_digest,artifacts:artifacts.map(ref=>({path:ref.path,digest:readArtifact(workspace,ref.path).digest}))};},
@@ -57,12 +64,15 @@ export function createDockerExecutor({request,controllerRoot,workerRunner,signal
     async saveReceipt(dispatch,result){put(path.join(controllerRoot,'executions',`${dispatch.request_digest}.json`),{result,digest:digest(result)});},
     async execute(dispatch){
       budget();const identity=admitted.get(dispatch.request_digest);if(!identity||JSON.stringify(identity)!==JSON.stringify(dispatch.expected_identity))throw new Error('Worker lacks host admission');
+      const admittedSource=request.host_setup?.isolation==='trusted-host'?snapshotWorkspace(workspace):null;
+      if(admittedSource&&dispatch.basis?.source_digest!==admittedSource.source_digest)throw Object.assign(new Error('Native dispatch source basis changed before execution; fresh dispatcher admission required'),{code:'stale_basis'});
       if(history.starts.some(attempt=>attempt.request_digest===dispatch.request_digest))throw new Error('Prior worker execution requires durable receipt replay; automatic retry is forbidden');
       const attempt={execution_owner:config.owner_id,engine_image:config.image,request_digest:dispatch.request_digest,invocation_id:identity.instance_id,started_at:Date.now(),status:'started'};history.starts.push(attempt);turns++;persistHistory();
       const fork=path.join(workerRoot,identity.instance_id);fs.mkdirSync(fork,{recursive:false,mode:0o700});
       // Source files and authorized input artifacts only. No sibling raw contributions,
       // controller state, grader, source credentials, or canonical Flow state is copied.
-      const before=snapshotWorkspace(workspace);
+      const before=admittedSource??snapshotWorkspace(workspace);
+      const nativeArtifactBasis=request.host_setup?.isolation==='trusted-host'?artifactInventory(workspace):null;
       for(const file of before.files){const dest=path.join(fork,file.path);fs.mkdirSync(path.dirname(dest),{recursive:true});fs.copyFileSync(path.join(workspace,file.path),dest);}
       const contribution=['contribute','dialogue'].includes(dispatch.phase);
       const targets=contribution?[{id:`contribution-${dispatch.role}`,stage:dispatch.stage,unit:dispatch.unit,path:`.aidlc/contributions/${dispatch.stage}/${dispatch.unit}/${dispatch.role}.md`}]:dispatch.context.artifact_targets??[];
@@ -85,10 +95,15 @@ export function createDockerExecutor({request,controllerRoot,workerRunner,signal
       if(Buffer.byteLength(JSON.stringify(worker))>16*1024*1024)throw new Error('Worker capture exceeds durable receipt budget');
       attempt.worker=worker;attempt.status='observed';persistHistory();
       observed.push(worker);
+      if(request.host_setup?.isolation==='trusted-host'&&snapshotWorkspace(workspace).source_digest!==before.source_digest)throw new Error('Native worker changed canonical source outside publication');
+      if(nativeArtifactBasis!==null&&artifactInventory(workspace)!==nativeArtifactBasis)throw new Error('Native worker changed canonical artifacts outside publication');
+      assertInputsCurrent(workspace);
       const observation={worker:identity.instance_id,container_id:worker.observed.container_id,provider_thread_id:worker.provider_thread_id,context_digest:worker.observed.context_digest,stdin_digest:worker.observed.stdin_digest,source_fork_digest:worker.observed.source_fork_digest,input_basis:dispatch.basis,terminal:worker.terminal,usage:worker.usage};
       const receipt={id:identity.instance_id,digest:digest(observation),request_digest:dispatch.request_digest};
       if(worker.storage_violation)throw Object.assign(new Error(`Worker storage budget refused: ${worker.storage_violation.reason}`),{code:'storage_budget',observation:worker.storage_violation});
-      if(worker.terminal.status!==0||worker.terminal.timeout||worker.terminal.overflow||!worker.provider_thread_id||!worker.container_removed)return {status:'failed',identity,identity_basis:'executor-observed',receipt,input_basis:dispatch.basis,artifacts:[],observation};
+      const native=request.host_setup?.isolation==='trusted-host';
+      const custody=native?worker.observed.execution_profile==='host-native'&&worker.observed.engine===request.execution.engine&&worker.engine_outcome==='completed':worker.container_removed===true;
+      if(worker.terminal.status!==0||worker.terminal.timeout||worker.terminal.overflow||worker.terminal.cancelled||!worker.provider_thread_id||!custody)return {status:'failed',identity,identity_basis:'executor-observed',receipt,input_basis:dispatch.basis,artifacts:[],observation};
       const response=normalizedResult(worker.final);
       // A successful provider process is not successful work. Preserve the
       // private fork for host diagnostics, but publish none of a worker's
@@ -160,5 +175,12 @@ export function createDockerExecutor({request,controllerRoot,workerRunner,signal
       return {status:response.status,identity,identity_basis:'executor-observed',receipt,input_basis:dispatch.basis,artifacts:returned.map(ref=>({path:ref.path,digest:ref.digest})),observation,changed_source:changed,...(contribution?{objections:response.objections??[],role:dispatch.role}:{})};
     }
   };
+  if(request.host_setup?.isolation==='trusted-host'){
+    // Native workers can access canonical paths. Keep the entire observation,
+    // execution and publication interval exclusive so an authorized peer's
+    // publication cannot be confused with this worker's unauthorized writes.
+    const execute=executor.execute.bind(executor);let nativeQueue=Promise.resolve();
+    executor.execute=dispatch=>{const next=nativeQueue.then(()=>execute(dispatch));nativeQueue=next.catch(()=>{});return next;};
+  }
   return executor;
 }

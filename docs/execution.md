@@ -52,7 +52,7 @@ Component/subprocess tests are implementation evidence. Real provider execution,
 
 ## Optional source-write guard
 
-Pinned AWS 2.11.0 executable sensor resolution is stage-scoped, despite older procedure prose describing checks on every write. The default preserves that executable behavior. An explicitly registered `write_sensor_policy: "all_actual_source_writes"` also checks actual source writes against the pinned extension matchers. Those additional checks identify their trigger as Kontour policy and count as a declared treatment difference. They cannot be claimed AWS parity or silently change a registered experiment.
+Pinned AWS source executable sensor resolution is stage-scoped, despite older procedure prose describing checks on every write. The default preserves that executable behavior. An explicitly registered `write_sensor_policy: "all_actual_source_writes"` also checks actual source writes against the pinned extension matchers. Those additional checks identify their trigger as Kontour policy and count as a declared treatment difference. They cannot be claimed AWS parity or silently change a registered experiment.
 
 The included command operation provider accepts ordinary operator configuration `{stages:{<stage>:{argv:[<executable>,...],outputs:[<workspace-relative-file>],timeout_ms}}}`. The default command runner uses the actual admitted workspace, retains real exit/output receipts and bounds process-group lifetime. No shell interpolation or model-created command is used. Attempt records prevent automatic repeated operations on the same registration. Learning capture retains immutable source/decision provenance and explicitly reports Knowledge Kit adoption as `not_imported` until a separate public import occurs.
 
