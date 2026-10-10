@@ -7,6 +7,13 @@ import { digest, requestBindingDigest } from './compile.mjs';
 import { validateUnits } from './dispatch.mjs';
 import {validateVerificationCommand,verifyConstructionUnit} from './construction-checkpoints.mjs';
 
+/** Pinned usesStageLevelPerUnitArtifacts: the approved effective plan may
+ * omit Units, but a completed producer keeps its unit authority after a skip.
+ * Invalidating its artifacts never silently converts it to stage-level work. */
+export function requiresConstructionUnits(stageIds,records,runState={}){
+  return stageIds.includes('units-generation')||records.some(record=>record.stage==='units-generation'&&['pass','disabled'].includes(record.sensors?.status))||[...(runState.gate_outcomes??[]),...(runState.gate_outcome_history??[])].some(outcome=>outcome.gate_id==='units-generation-gate'&&outcome.status==='pass');
+}
+
 /** Deterministic dependency-first order; source custody is exclusive per Bolt. */
 export function constructionOrder(units) {
   const manifest=validateUnits(units),ordered=[],seen=new Set();

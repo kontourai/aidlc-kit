@@ -23,7 +23,7 @@ test('npm tarball installs away from source and activates through public kit con
   command([process.execPath,'--input-type=module','-e',"await import('@kontourai/flow-agents/docker-worker');await import('@kontourai/flow-agents/provider-broker');"],consumer);
   command([process.execPath,'scripts/compile.mjs','--check'],kit);
   command([process.execPath,'evals/public-flow-conformance.mjs'],kit);
-  command([process.execPath,'--test','evals/dispatch-checkpoints.test.mjs','evals/review-request-changes.test.mjs'],kit);
+  command([process.execPath,'--test','evals/dispatch-checkpoints.test.mjs','evals/review-request-changes.test.mjs','evals/stage-level-construction.test.mjs'],kit);
   const cli=path.join(consumer,'node_modules/@kontourai/flow-agents/build/src/cli.js');const workspace=consumer;
   command([process.execPath,cli,'kit','install',kit,'--dest',workspace],consumer);
   const activation=JSON.parse(command([process.execPath,cli,'kit','activate','--dest',workspace,'--format','json'],consumer));

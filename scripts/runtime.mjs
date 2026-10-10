@@ -12,7 +12,7 @@ import { verifyFinalUnits } from './final-review.mjs';
 import { plannedTestCommands } from './commands.mjs';
 import { snapshotWorkspace } from './workspace.mjs';
 import { resolveCeremony, effectiveStage, summaryTargets,deferCheckpointLearnings } from './ceremony.mjs';
-import { constructionBlock, executeConstruction } from './construction.mjs';
+import { constructionBlock, executeConstruction, requiresConstructionUnits } from './construction.mjs';
 import {constructionCheckpointPolicy} from './construction-checkpoints.mjs';
 import {resolveTestingContract,assertTestingPolicyCurrent,validateTestingPlans,stampTestingPlan} from './testing-posture.mjs';
 import {resolveComposition} from './composition.mjs';
@@ -161,7 +161,10 @@ async function runAidlcUnlocked({request,executor,commandRunner,authority,contro
     const retained=records.find(record=>record.stage===stageId&&!record.invalidated&&['pass','disabled'].includes(record.sensors?.status));
     if(retained){await evaluateRun(request.run_id,{cwd:controllerRoot});continue;}
     const original=snapshot.stages.find(s=>s.slug===stageId);const stage=effectiveStage(original,settings);
-    if(!executionSlice&&(settings.skeleton==='on'||checkpointPolicy.enabled)&&!units&&stage.phase==='construction'&&stage.for_each){failure={stage:stageId,reason:'unit_manifest_missing'};await refuse(stageId,failure);break;}
+    if(!executionSlice&&!units&&stage.phase==='construction'&&stage.for_each){
+      if(requiresConstructionUnits(stageIds,records,run.state)){failure={stage:stageId,reason:'unit_manifest_missing'};await refuse(stageId,failure);break;}
+      delete stage.for_each;
+    }
     if(!executionSlice&&(settings.skeleton==='on'||checkpointPolicy.enabled)&&units&&stage.phase==='construction'&&stage.for_each){
       const block=constructionBlock(snapshot,stageIds,stageId),initialArtifacts=records.filter(record=>!record.invalidated).flatMap(record=>record.artifacts??[]);
       const walk=await executeConstruction({request,controllerRoot,stageIds:block,units,authority,signal,checkpointPolicy,commandRunner,testingContractDigest:testing.contract_digest,skeleton:settings.skeleton==='on',snapshotBasis:async refs=>{const current=currentRefs(workspace,refs);if(current.length!==refs.length||current.some((ref,index)=>ref.digest!==refs[index].digest))throw new Error('Skeleton checkpoint artifact basis changed');return {source_digest:snapshotWorkspace(workspace).source_digest,artifacts:current};},

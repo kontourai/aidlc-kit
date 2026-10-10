@@ -79,3 +79,12 @@ test('unobserved shared-file edits cannot hide in legitimate later-unit publicat
  }finally{fs.rmSync(f.root,{recursive:true,force:true});}});
 
 test('untracked source additions outside any observed unit delta refuse checkpoint replay',async()=>{const f=await fixture();try{const order=[],request=requestFor(f,[process.execPath,'-e','process.exit(0)']),authority=authorityFor(f,request,['construction-verification-command']);const held=await runAidlc({request,executor:executorFor(f,order),authority,commandRunner:runnerFor(f,order),controllerRoot:f.controllerRoot});assert.equal(held.status,'waiting');fs.writeFileSync(path.join(f.workspace,'unobserved.mjs'),'export const hidden=1;');await assert.rejects(runAidlc({request,executor:executorFor(f,order),authority,commandRunner:runnerFor(f,order),controllerRoot:f.controllerRoot}),/outside publication lineage/);assert.equal(order.filter(item=>item.startsWith('check')).length,1);}finally{fs.rmSync(f.root,{recursive:true,force:true});}});
+
+test('an authored approved DAG that disappears cannot become a stage-level construction fallback',async()=>{
+ const f=await fixture();try{
+  const order=[],request=requestFor(f,[process.execPath,'-e','process.exit(0)']);request.parameters.ceremony.skeleton='on';
+  const boundAuthority=authorityFor(f,request,['construction-verification-command']);const held=await runAidlc({request,executor:executorFor(f,order),authority:boundAuthority,commandRunner:runnerFor(f,order),controllerRoot:f.controllerRoot});assert.equal(held.status,'waiting');
+  const manifest=held.records.find(record=>record.stage==='units-generation').artifacts.find(ref=>ref.id==='unit-of-work-dependency');fs.unlinkSync(path.join(f.workspace,manifest.path));const before=[...order];
+  await assert.rejects(runAidlc({request,executor:executorFor(f,order),authority:boundAuthority,commandRunner:runnerFor(f,order),controllerRoot:f.controllerRoot}),/ENOENT|manifest|artifact|checkpoint|basis|lineage/);assert.deepEqual(order.filter(item=>item.includes('code-generation')),before.filter(item=>item.includes('code-generation')));
+ }finally{fs.rmSync(f.root,{recursive:true,force:true});}
+});
