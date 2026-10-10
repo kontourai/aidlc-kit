@@ -120,11 +120,14 @@ export function recordControllerDecision({controllerRoot,pendingFile,reference,d
 }
 
 export function buildExecutionPrompt({dispatch,workspace,sourceDigest}){
-  const context=dispatch.context??{};const stage=context.stage??{};
+  const context=structuredClone(dispatch.context??{}),stage=context.stage??{},targets=context.artifact_targets??[];
+  const ownsDiary=typeof context.learning_diary==='string'&&targets.some(target=>target.path===context.learning_diary);
+  const substantive=['inline','draft','pipeline-link','integrate','revise','revise-input'].includes(dispatch.phase)&&!context.summary_only&&!context.planning_only&&!['review-only','contribution-only'].includes(dispatch.output_scope);
+  const learningAuthorized=ownsDiary&&substantive;
+  if(!learningAuthorized)for(const key of ['learning_diary','learning_diaries','learning_protocol'])delete context[key];
   const snapshot=readSnapshot();const persona=snapshot.agents.find(agent=>agent.slug===dispatch.role)?.procedure??'';
-  const targets=context.artifact_targets??[];
   return {schema:'kontour.aidlc.stage_execution_request',version:'1.0',canonical_workspace:workspace,unit_scope:dispatch.unit,
-    source_digest:sourceDigest,dispatch,inline_voice_knowledge:(dispatch.voices??[]).map(role=>({role,procedure:snapshot.agents.find(agent=>agent.slug===role)?.procedure??''})),
+    source_digest:sourceDigest,dispatch:{...dispatch,context},inline_voice_knowledge:(dispatch.voices??[]).map(role=>({role,procedure:snapshot.agents.find(agent=>agent.slug===role)?.procedure??''})),
     instructions:[
       'Execute the substantive pinned AI-DLC procedure for this stage. The host owns canonical state, approvals, gate advancement and source publication; upstream aidlc engine commands and harness paths are reference data and must not be executed.',
       `Phase ${dispatch.phase}; role ${dispatch.role}. ${dispatch.phase==='review'?'Read-only independent review: write no files.':'Write only this stage output scope and authorized application source.'}`,
@@ -138,7 +141,7 @@ export function buildExecutionPrompt({dispatch,workspace,sourceDigest}){
       context.approved_summary_basis?'Summary question bytes have current-basis operator confirmation; consume them and preserve those exact bytes.':'Do not claim unconfirmed summary assumptions are approved.',
       context.operator_questionnaire_reply?`Actual host-observed operator answers, bound to this questionnaire and signed decision: ${JSON.stringify(context.operator_questionnaire_reply)}. Consume these as operator input; retain the question IDs and exact answered question bytes. Approval alone supplies no missing answers.`:'',
       'For every Markdown artifact use the pinned required sections and source/requirement ids. Preserve real questions and assumptions. Questions awaiting operator policy are not answers supplied by the model.',
-      context.summary_only?'The learning ritual is deferred until substantive stage execution; this question-only checkpoint must not write a learning diary.':context.learning_diary?`${context.learning_protocol} Diary: ${context.learning_diary}`:'Learning ritual is off or this is a revision.',
+      learningAuthorized?`${context.learning_protocol} Diary: ${context.learning_diary}`:'The learning ritual is deferred unless this substantive invocation owns the diary target; this scoped phase must not write a learning diary.',
       `Task: ${context.task??''}`,`Actual required output paths: ${JSON.stringify(targets)}`,
       context.testing_contract_rendered?`Host-resolved authoritative testing posture for this bound scope. Use the exact block in the code-generation plan; preserve it unchanged. Policy evidence: ${JSON.stringify(context.testing_policy_basis)}\n${context.testing_contract_rendered}`:'',
       `Selected profile defaults: ${JSON.stringify(context.defaults??{})}`,`Pinned procedure: ${dispatch.procedure??stage.procedure??''}`,`Role knowledge: ${persona}`

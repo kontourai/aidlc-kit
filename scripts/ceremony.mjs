@@ -32,3 +32,11 @@ export function summaryTargets(stage, targets, settings) {
   if (stage.summary_confirmation === 'required' && !questions.length) throw new Error(`Summary confirmation declared without questions: ${stage.slug}`);
   return questions;
 }
+
+
+/** Preparation phases do not own the substantive stage learning diary. */
+export function deferCheckpointLearnings(context){
+ const scoped=structuredClone(context);
+ for(const entry of [scoped.shared,...Object.values(scoped.units??{})])for(const key of ['learning_diary','learning_diaries','learning_protocol'])delete entry[key];
+ return scoped;
+}

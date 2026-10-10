@@ -11,7 +11,7 @@ import { createUnitFlow } from './unit-flow.mjs';
 import { verifyFinalUnits } from './final-review.mjs';
 import { plannedTestCommands } from './commands.mjs';
 import { snapshotWorkspace } from './workspace.mjs';
-import { resolveCeremony, effectiveStage, summaryTargets } from './ceremony.mjs';
+import { resolveCeremony, effectiveStage, summaryTargets,deferCheckpointLearnings } from './ceremony.mjs';
 import { constructionBlock, executeConstruction } from './construction.mjs';
 import {constructionCheckpointPolicy} from './construction-checkpoints.mjs';
 import {resolveTestingContract,assertTestingPolicyCurrent,validateTestingPlans,stampTestingPlan} from './testing-posture.mjs';
@@ -236,10 +236,7 @@ async function runAidlcUnlocked({request,executor,commandRunner,authority,contro
       const questions=stageId==='intent-capture'?artifacts.filter(ref=>ref.id.endsWith('-questions')):summaryTargets(stage,artifacts,settings);
       if(questions.length){
         const checkpoint={...stage,workspace_requires:false,reviewer:undefined,produces:questions.map(a=>a.id),optional_produces:[]};
-        const checkpointContext=structuredClone(context);checkpointContext.shared.planning_only=true;checkpointContext.shared.summary_only=true;checkpointContext.shared.artifact_targets=questions;
-        // The learning ritual belongs to substantive stage completion, not a
-        // question-only checkpoint whose output scope excludes the diary.
-        for(const entry of [checkpointContext.shared,...Object.values(checkpointContext.units)])for(const key of ['learning_diary','learning_diaries','learning_protocol'])delete entry[key];
+        const checkpointContext=deferCheckpointLearnings(context);checkpointContext.shared.planning_only=true;checkpointContext.shared.summary_only=true;checkpointContext.shared.artifact_targets=questions;
         for(const entry of Object.values(checkpointContext.units))entry.artifact_targets=entry.artifact_targets.filter(a=>a.id.endsWith('-questions'));
         const questionnairePurpose=stageId==='intent-capture'&&settings.summary_confirmation==='off'?'input-confirmation':'summary-confirmation';
         const summaryBinding={request_digest:binding.request_digest,checkpoint,context:checkpointContextBinding(checkpointContext),source_digest:snapshotWorkspace(workspace).source_digest},admission=checkpointRetryIdentity(run);
@@ -261,7 +258,7 @@ async function runAidlcUnlocked({request,executor,commandRunner,authority,contro
       if(stageId==='code-generation'){
         assertTestingPolicyCurrent(testing,testingInput);
         const planning={...stage,workspace_requires:false,reviewer:undefined,for_each:stage.for_each,produces:['code-generation-plan','unit-test-instructions'],optional_produces:[]};
-        const planningContext=structuredClone(context);planningContext.shared.planning_only=true;planningContext.shared.artifact_targets=artifacts.filter(a=>['code-generation-plan','unit-test-instructions'].includes(a.id));
+        const planningContext=deferCheckpointLearnings(context);planningContext.shared.planning_only=true;planningContext.shared.artifact_targets=artifacts.filter(a=>['code-generation-plan','unit-test-instructions'].includes(a.id));
         for(const unitContext of Object.values(planningContext.units))unitContext.artifact_targets=unitContext.artifact_targets.filter(a=>['code-generation-plan','unit-test-instructions'].includes(a.id));
         const planningExecutor={...executor,async execute(dispatch){
           const result=await executor.execute({...dispatch,beforePublication:async()=>{await dispatch.beforePublication?.();assertTestingPolicyCurrent(testing,testingInput);}});

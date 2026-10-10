@@ -142,3 +142,11 @@ test('recorded advisory disposition survives durable replay bookkeeping but neve
  replay.decision.units[0].receipts[0].receipt.digest='c'.repeat(64);assert.equal((await authority.authorize(replay)).authorized,false);
  }finally{fs.rmSync(root,{recursive:true,force:true});}
 });
+
+
+test('learning prompt follows actual phase and diary target ownership, preserving the original dispatch input',()=>{
+ const context={stage:{slug:'fixture'},artifact_targets:[{id:'memory',path:'stage/memory.md'}],learning_diary:'stage/memory.md',learning_diaries:[{path:'stage/memory.md'}],learning_protocol:'Keep actual observed stage learnings.'};
+ for(const phase of ['review','contribute','dialogue']){const dispatch={phase,role:'fixture',output_scope:phase==='review'?'review-only':'contribution-only',context:structuredClone(context)},before=structuredClone(dispatch),prompt=buildExecutionPrompt({dispatch,workspace:'/workspace',sourceDigest:'a'.repeat(64)});assert.ok(!prompt.instructions.some(line=>/Diary:/.test(line)));assert.equal(prompt.dispatch.context.learning_diary,undefined);assert.equal(prompt.dispatch.context.learning_protocol,undefined);assert.deepEqual(dispatch,before);}
+ const author=buildExecutionPrompt({dispatch:{phase:'integrate',role:'fixture',context},workspace:'/workspace',sourceDigest:'a'.repeat(64)});assert.ok(author.instructions.some(line=>/Diary: stage\/memory.md/.test(line)));assert.equal(author.dispatch.context.learning_diary,context.learning_diary);
+ const unowned=buildExecutionPrompt({dispatch:{phase:'inline',role:'fixture',context:{...context,artifact_targets:[{id:'output',path:'stage/output.md'}]}},workspace:'/workspace',sourceDigest:'a'.repeat(64)});assert.ok(!unowned.instructions.some(line=>/Diary:/.test(line)));assert.equal(unowned.dispatch.context.learning_diary,undefined);
+});
