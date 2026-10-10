@@ -72,7 +72,7 @@ export function decisionBindingDigest(input){
   return digest(bound);
 }
 
-const DECISION_PURPOSES=['stage-selection','source-change','summary-confirmation','input-confirmation','code-plan','construction-verification-command','construction-checkpoint','skeleton-checkpoint','review-disposition','deployment','operation'];
+const DECISION_PURPOSES=['profile-composition','stage-selection','source-change','summary-confirmation','input-confirmation','code-plan','construction-verification-command','construction-checkpoint','skeleton-checkpoint','review-disposition','deployment','operation'];
 /** Trusted CLI interaction. This observes an operator action, not a human signature. */
 export function recordControllerDecision({controllerRoot,pendingFile,reference,decision='approve',disposition}) {
   if(typeof reference!=='string'||!reference.trim()||reference.length>2048||decision!=='approve')throw new Error('Explicit approval and reference required');
