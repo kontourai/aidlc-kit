@@ -21,8 +21,11 @@ async function fixture(t,units=[{id:'a',mutable_resources:['a']}],options={}){
   return {adapter,controllerRoot};
 }
 
-test('fresh canonical claim, actual renewal, Surface evidence and canonical join',async t=>{
-  const {adapter}=await fixture(t,undefined,{leaseSeconds:2,renewalIntervalMs:30});
+test('default-lease canonical claim, actual renewal, Surface evidence and canonical join',async t=>{
+  // This checks renewal/join behavior, not expiry. Evidence attachment holds
+  // Flow's mutation lock; renewals must wait for it and cannot revive an expired
+  // claim. Use the real default lease instead of an incidental two-second race.
+  const {adapter}=await fixture(t,undefined,{renewalIntervalMs:30});
   const lease=await adapter.claim({unit:'a'});await adapter.renew(lease);
   const active=await adapter.load();assert.ok(active.state.multi_cursor.claim_history.some(event=>event.action==='renewed'));
   assert.equal((await adapter.release(lease,record('a'))).settled,true);
