@@ -73,3 +73,40 @@ Following pinned AWS initialization, selecting Units plus a per-unit source-prod
 Every complete child Flow requires a real successful authorized verification command and unchanged evidence, followed by a distinct `construction-checkpoint` approval bound to its command receipt, source/artifact basis and Testing Contract. A skeleton first unit retains its additional `skeleton-checkpoint` authority. The next unit cannot start before the preceding checkpoint is approved. Actual command receipts must bind command, identity, exit code and timeout/signal state; absent, failed, changed or mismatched proof refuses completion. Attempt records are written before execution, and failed or interrupted commands cannot silently restart under the same registration.
 
 Completed child publications retain actual before/after source-file digests, including deletion tombstones. Resume checks the entire canonical source against the initial basis plus the ordered, canonically completed child-publication chain. This permits authorized later units to change shared files without rerunning earlier work. Unknown edits, additions, deletions, broken source transitions and altered checkpoint receipts refuse replay. Earlier accepted checkpoints remain labelled historical; they do not become reviews of later source. Declared final reviewers still evaluate the current complete source independently before parent acceptance.
+
+### Per-run profile composition
+
+The ordinary installed-kit request accepts `parameters.composition` alongside
+`parameters.profile`, for example:
+
+```json
+{"profile":"poc","composition":{"name":"discovery","add":["market-research"],"skip":[],"strict_inputs":false}}
+```
+
+`name` is a bounded lowercase slug. `add` and `skip` are unique pinned stage
+identities; unknown stages, overlapping changes, already-selected additions,
+unselected skips, initialization skips and dependency cycles are rejected.
+Only the installed 33-stage methodology inventory is executable. No custom
+stage code or runtime is loaded. Dependencies determine a stable order with
+pinned stage order as the tie breaker. Greenfield excludes Reverse Engineering.
+The base defaults and testing scope are inherited; composition without an
+explicit base uses Classic, matching upstream custom creation. Ordinary
+requests without composition retain Feature as their default.
+
+As in upstream plan creation, required artifacts with producers outside the
+selected path are retained as explicit advisories in the composition proposal;
+missing graph producers are errors. `strict_inputs: true` applies upstream
+recompose-style refusal when a required producer is absent. Runtime omissions
+cannot bypass that stricter check. Selected producers still supply real,
+current artifact bytes through the existing lineage machinery.
+
+Before starting the canonical Flow, `profile-composition` authority approves
+the exact request, compiled definition, ceremony, testing policy/contract and
+source basis. An unapproved proposal returns `waiting` with the normal signed
+pending decision; the existing `aidlc` decision command approves and resumes
+it. A registered operator policy may explicitly include this purpose. It is
+host policy or an observed operator interaction, never a fabricated human
+signature. Composition approval does not approve input answers, source writes,
+code plans or deployment. Durable resume verifies the retained approval and
+refuses altered proposals or definition bindings. Changing a running plan
+requires a new run; mid-run adaptive recomposition is not claimed.

@@ -15,6 +15,7 @@ import { resolveCeremony, effectiveStage, summaryTargets } from './ceremony.mjs'
 import { constructionBlock, executeConstruction } from './construction.mjs';
 import {constructionCheckpointPolicy} from './construction-checkpoints.mjs';
 import {resolveTestingContract,assertTestingPolicyCurrent,validateTestingPlans,stampTestingPlan} from './testing-posture.mjs';
+import {resolveComposition} from './composition.mjs';
 
 const safeId = value => typeof value === 'string' && /^[a-z0-9][a-z0-9._-]{0,127}$/.test(value);
 const inside = (root, file) => { const rel=path.relative(root,file);return rel!== '..'&&!rel.startsWith(`..${path.sep}`)&&!path.isAbsolute(rel); };
@@ -98,7 +99,7 @@ export async function runAidlc({request,executor,commandRunner,authority,control
   fs.mkdirSync(controllerRoot,{recursive:true,mode:0o700});controllerRoot=fs.realpathSync(controllerRoot);
   if(inside(workspace,controllerRoot)||inside(controllerRoot,workspace))throw new Error('Controller state must be separate from model workspace');
   if(!safeId(request.run_id)||typeof request.prompt!=='string'||!request.prompt.trim())throw new Error('Bound run id and task prompt required');
-  const snapshot=readSnapshot(),profile=request.parameters?.profile??'feature',defaults=snapshot.profiles[profile]?.defaults;
+  const {snapshot,profile,composition}=resolveComposition(readSnapshot(),request.parameters??{}),defaults=snapshot.profiles[profile]?.defaults;
   if(!defaults)throw new Error('Unknown profile');
   const settings=resolveCeremony(defaults,request.parameters?.ceremony??{});
   const projectType=request.parameters?.project_type??'brownfield';const omitted=new Set();
@@ -111,8 +112,20 @@ export async function runAidlc({request,executor,commandRunner,authority,control
     const input={purpose:'stage-selection',stage:decision.stage,decision,request_digest:requestBindingDigest(request)};const grant=await authority?.authorize?.(input);
     if(!grant?.authorized||!grant.reference||authority.verify?.(grant.receipt,input)!==true)throw new Error('Stage selection needs verified host authority');omitted.add(decision.stage);}
   const {flow,stageIds,selectedSnapshot}=boundDefinition(snapshot,profile,request.run_id,projectType,omitted,settings);
+  if(composition&&!executionSlice&&['workspace-scaffold','workspace-detection','state-init'].some(id=>!stageIds.includes(id)))throw new Error('Composition cannot skip initialization');
+  if(composition?.strict_inputs&&!executionSlice)for(const [index,id]of stageIds.entries()){
+    const stage=selectedSnapshot.stages.find(stage=>stage.slug===id);
+    for(const input of stage.consumes??[])if(input.required&&(!input.conditional_on||input.conditional_on===projectType)&&!selectedSnapshot.stages.some(producer=>stageIds.slice(0,index).includes(producer.slug)&&[...(producer.produces??[]),...(producer.optional_produces??[])].includes(input.artifact)))throw new Error(`Required producer off path: ${id}/${input.artifact}`);
+  }
   const checkpointPolicy=constructionCheckpointPolicy(snapshot,stageIds,request.parameters??{});
   const bindingFile=path.join(controllerRoot,'binding.json');const binding={request_digest:requestBindingDigest(request),definition_digest:digest(flow),profile,project_type:projectType,upstream_commit:snapshot.upstream.commit,testing_policy_digest:testing.policy_digest,testing_contract_digest:testing.contract_digest};
+  if(composition&&!executionSlice){
+    const approvalFile=path.join(controllerRoot,'composition-approval.json');
+    const retained=fs.existsSync(bindingFile)&&fs.existsSync(approvalFile)?json(approvalFile):null;
+    const input={purpose:'profile-composition',stage:'profile-composition',request_digest:binding.request_digest,composition,definition_digest:binding.definition_digest,settings,testing_policy_digest:testing.policy_digest,testing_contract_digest:testing.contract_digest,source_digest:retained?.input?.source_digest??snapshotWorkspace(workspace).source_digest};
+    if(retained){if(digest(retained.input)!==digest(input)||authority?.verify?.(retained.grant.receipt,input)!==true)throw new Error('Composition approval binding changed');}
+    else {const grant=await authority?.authorize?.(input);if(!grant?.authorized||!grant.reference||authority?.verify?.(grant.receipt,input)!==true)return {schema_version:'1.0',run_id:request.run_id,profile,ceremony:settings,definition_digest:binding.definition_digest,status:'waiting',failure:{reason:'awaiting_decision',stage:'profile-composition',pending:grant?.pending??null},records:[],executions:[],semantic_quality:'not_verified'};write(approvalFile,{input,grant});}
+  }
   if(fs.existsSync(bindingFile)){if(JSON.stringify(json(bindingFile))!==JSON.stringify(binding))throw new Error('Resume input or definition changed');}
   else{write(bindingFile,binding);const definitionFile=path.join(controllerRoot,'definition.json');write(definitionFile,flow);await startRun(definitionFile,{cwd:controllerRoot,runId:request.run_id,params:{subject:request.run_id}});}
   fs.mkdirSync(path.join(workspace,'.aidlc'),{recursive:true});fs.writeFileSync(path.join(workspace,'.aidlc/project-description.json'),JSON.stringify(request.prompt)+'\n');
@@ -332,6 +345,6 @@ export async function runAidlc({request,executor,commandRunner,authority,control
     }
   }
   const run=await loadRun(request.run_id,controllerRoot);
-  return {schema_version:'1.0',run_id:request.run_id,profile,ceremony:settings,definition_digest:binding.definition_digest,upstream_commit:snapshot.upstream.commit,
+  return {schema_version:'1.0',run_id:request.run_id,profile,ceremony:settings,...(composition?{composition}:{}),definition_digest:binding.definition_digest,upstream_commit:snapshot.upstream.commit,
     status:signal?.aborted?'cancelled':run.state.status==='completed'?'completed':failure?.reason==='authority_required'||failure?.reason==='awaiting_decision'||failure?.reason==='mob_judgment'||failure?.reason==='advisory_review'?'waiting':failure?.reason==='budget_exhausted'||visits>stageLimit?'budget_exhausted':'failed',failure,records,executions,canonical_state:run.state,semantic_quality:'not_verified'};
 }
