@@ -22,10 +22,10 @@ Package-install verification packs this repository and performs a clean npm inst
 
 See [execution](docs/execution.md) and [methodology](docs/methodology.md) for controller, authority and evidence boundaries.
 
-For ordinary installed execution, install the npm package in the destination workspace, then install and activate that directory as a kit. The required Flow Agents release must provide `/kit-execution`, `/docker-worker` and `/provider-broker` public exports; version 6.5.2 from the registry does not yet contain these additions. Package candidates are development evidence until the runtime release lands.
+For ordinary installed execution, install this repository through npm in the destination workspace, then install and activate that directory as a kit. The kit pins the published Flow Agents 7.0.0 runtime, including its public `/kit-execution`, `/docker-worker` and `/provider-broker` exports. The kit itself is distributed from Git; select an immutable reviewed commit for reproducible installation.
 
 ```sh
-npm install @kontourai/aidlc-kit
+npm install "git+https://github.com/kontourai/aidlc-kit.git#<reviewed-commit-sha>"
 flow-agents kit install node_modules/@kontourai/aidlc-kit --dest .
 flow-agents kit activate --dest . --format json
 flow-agents kit run aidlc --dest . --request /private/request.json --controller-root /private/run-controller --auth-file /private/codex-auth.json
