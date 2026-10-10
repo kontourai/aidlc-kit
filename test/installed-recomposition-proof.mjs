@@ -43,7 +43,7 @@ for(let interaction=0;interaction<6;interaction++){
   const previous=result.failure.detail.pending.input_digest;decide(result.failure.detail.pending);
   if(mode==='input-source')fs.writeFileSync(path.join(workspace,'README.md'),'Changed source after exact input approval');
   else if(mode==='input-artifact'){const input=JSON.parse(fs.readFileSync(result.failure.detail.pending.file)).payload.input,target=input.basis.find(ref=>!ref.id.endsWith('-questions'));assert.ok(target);fs.appendFileSync(path.join(workspace,target.path),'Changed intent output after approval');}
-  else {const file=path.join(controllerRoot,'input-checkpoints','intent-capture.json'),saved=JSON.parse(fs.readFileSync(file));saved.checkpoint.dispatched.units[0].receipts[0].receipt.digest='f'.repeat(64);saved.envelope.payload.checkpoint_digest=digest(saved.checkpoint);fs.writeFileSync(file,JSON.stringify(saved));}
+  else {const file=path.join(controllerRoot,'input-checkpoints','intent-capture.json'),saved=JSON.parse(fs.readFileSync(file));saved.checkpoint.prepared.units[0].receipts[0].receipt.digest='f'.repeat(64);saved.envelope.payload.checkpoint_digest=digest(saved.checkpoint);fs.writeFileSync(file,JSON.stringify(saved));}
   result=await execute();assert.notEqual(result.status,'completed');
   if(mode==='recomputed-input'){assert.equal(result.status,'failed');assert.match(result.failure.detail.message,/input checkpoint changed/);}else{assert.equal(result.status,'waiting');assert.notEqual(result.failure.detail.pending.input_digest,previous);}
   invalidationProved=true;break;
