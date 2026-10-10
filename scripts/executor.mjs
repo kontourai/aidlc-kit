@@ -10,7 +10,7 @@ import {stampTestingPlan} from './testing-posture.mjs';
 const json=file=>JSON.parse(fs.readFileSync(file,'utf8'));
 const put=(file,value)=>{fs.mkdirSync(path.dirname(file),{recursive:true,mode:0o700});fs.writeFileSync(file,JSON.stringify(value,null,2)+'\n',{flag:'wx',mode:0o600});};
 const replace=(file,value)=>{const temp=`${file}.${randomUUID()}.tmp`;put(temp,value);fs.renameSync(temp,file);};
-const normalizedResult=text=>{const raw=text?.trim().replace(/^```(?:json)?\s*\n/,'').replace(/\n```$/,'');const value=JSON.parse(raw);if(!value||!['completed','failed'].includes(value.status)||!Array.isArray(value.artifacts))throw new Error('Worker final response violates execution schema');for(const forbidden of ['receipt','identity','authorized','gate_status'])if(Object.hasOwn(value,forbidden))throw new Error(`Model cannot supply ${forbidden}`);return value;};
+const normalizedResult=text=>{const raw=text?.trim().replace(/^```(?:json)?\s*\n/,'').replace(/\n```$/,'');const value=JSON.parse(raw);if(!value||!['completed','failed'].includes(value.status)||!Array.isArray(value.artifacts)||value.artifacts.length>512)throw new Error('Worker final response violates execution schema');for(const forbidden of ['receipt','identity','authorized','gate_status'])if(Object.hasOwn(value,forbidden))throw new Error(`Model cannot supply ${forbidden}`);return value;};
 const safeRel=(file)=>typeof file==='string'&&file.length>0&&!path.isAbsolute(file)&&!file.split(/[\\/]/).some(p=>p==='..');
 const inside=(root,file)=>{const rel=path.relative(root,file);return rel!=='..'&&!rel.startsWith(`..${path.sep}`)&&!path.isAbsolute(rel);};
 
@@ -64,8 +64,12 @@ export function createDockerExecutor({request,controllerRoot,workerRunner,signal
       for(const file of before.files){const dest=path.join(fork,file.path);fs.mkdirSync(path.dirname(dest),{recursive:true});fs.copyFileSync(path.join(workspace,file.path),dest);}
       const contribution=['contribute','dialogue'].includes(dispatch.phase);
       const targets=contribution?[{id:`contribution-${dispatch.role}`,stage:dispatch.stage,unit:dispatch.unit,path:`.aidlc/contributions/${dispatch.stage}/${dispatch.unit}/${dispatch.role}.md`}]:dispatch.context.artifact_targets??[];
+      const ownTargets=targets.filter(ref=>!dispatch.unit||dispatch.unit==='stage'||ref.unit===dispatch.unit);
+      const approvedInputs=new Map([...(dispatch.context.approved_plan_basis??[]),...(dispatch.context.approved_summary_basis??[])].map(ref=>[ref.path,ref.digest]));
       const priorArtifacts=[...(dispatch.context.upstream_artifacts??[]),...(dispatch.context.approved_plan_basis??[]),...(dispatch.context.approved_summary_basis??[]),...(dispatch.reviewed_artifacts??[]),...(dispatch.revised_artifacts??[]),...(dispatch.upstream??[]).flatMap(value=>value.artifacts??[]),...(dispatch.draft?.artifacts??[]),...(dispatch.contributions??dispatch.positions??[]).flatMap(value=>value.artifacts??[])];
-      for(const ref of priorArtifacts){if(!safeRel(ref.path))throw new Error('Invalid artifact input path');try{readArtifact(workspace,ref.path);const dest=path.join(fork,ref.path);fs.mkdirSync(path.dirname(dest),{recursive:true});fs.copyFileSync(path.join(workspace,ref.path),dest);}catch(error){if(error.code!=='ENOENT')throw error;}}
+      const inputArtifacts=new Map();
+      for(const ref of priorArtifacts){if(!safeRel(ref.path))throw new Error('Invalid artifact input path');try{const observed=readArtifact(workspace,ref.path);if(ref.digest!==undefined&&ref.digest!==observed.digest)throw new Error('Artifact input basis changed before worker copy');inputArtifacts.set(ref.path,observed.digest);const dest=path.join(fork,ref.path);fs.mkdirSync(path.dirname(dest),{recursive:true});fs.copyFileSync(path.join(workspace,ref.path),dest);}catch(error){if(error.code!=='ENOENT'||approvedInputs.has(ref.path))throw error;}}
+      const assertInputsCurrent=(root)=>{for(const [file,expected] of inputArtifacts){if(dispatch.phase!=='review'&&ownTargets.some(target=>target.path===file)&&!approvedInputs.has(file))continue;let actual;try{actual=readArtifact(root,file).digest;}catch{throw new Error('Worker removed or made an assigned input unreadable');}if(actual!==expected)throw new Error(approvedInputs.has(file)?'Worker changed approved plan/test instructions':'Worker changed an assigned read-only input');}};
       for(const diary of dispatch.context.learning_diaries??[]){const source=path.join(workspace,diary.path);if(fs.existsSync(source)){fs.mkdirSync(path.dirname(path.join(fork,diary.path)),{recursive:true});fs.copyFileSync(source,path.join(fork,diary.path));}}
       for(const local of ['.aidlc/state.md','.aidlc/project-description.json']){const source=path.join(workspace,local);if(fs.existsSync(source)){fs.mkdirSync(path.dirname(path.join(fork,local)),{recursive:true});fs.copyFileSync(source,path.join(fork,local));}}
       const prompt=buildExecutionPrompt({dispatch,workspace,sourceDigest:before.source_digest});
@@ -108,17 +112,25 @@ export function createDockerExecutor({request,controllerRoot,workerRunner,signal
       const resources=dispatch.mutable_resources;
       if(dispatch.unit&&dispatch.unit!=='stage'&&changed.length&&Array.isArray(resources)&&resources.length&&!resources.includes('source/workspace')&&!resources.includes('*'))
         for(const file of changed)if(!resources.some(scope=>file===scope||file.startsWith(`${scope}/`)))throw Object.assign(new Error(`Source change outside declared unit resources: ${file}`),{code:'unit_scope'});
+      assertInputsCurrent(fork);
       if(dispatch.phase==='review'){
         if(changed.length)throw new Error('Read-only reviewer changed source');
         const basis=await executor.snapshotBasis({artifacts:dispatch.reviewed_artifacts??[]});
         return {status:response.status,identity,identity_basis:'executor-observed',receipt,input_basis:dispatch.basis,artifacts:dispatch.reviewed_artifacts??[],basis,verdict:response.verdict,findings:response.findings??[],observation};
       }
-      const ownTargets=targets.filter(ref=>!dispatch.unit||dispatch.unit==='stage'||ref.unit===dispatch.unit);
       const returned=observeOutputs(fork,ownTargets);
-      for(const approved of [...(dispatch.context.approved_plan_basis??[]),...(dispatch.context.approved_summary_basis??[])]){const present=returned.find(ref=>ref.path===approved.path);if(present&&present.digest!==approved.digest)throw new Error('Worker changed approved plan/test instructions');}
-      if(response.artifacts.some(ref=>!safeRel(ref.path)||!ownTargets.some(target=>target.path===ref.path)))throw new Error('Worker returned artifacts outside assigned scope');
+      const reports=[];
+      for(const ref of response.artifacts){
+        if(!ref||!safeRel(ref.path))throw new Error('Worker returned artifacts outside assigned scope');
+        if(ownTargets.some(target=>target.path===ref.path)){reports.push({path:ref.path,kind:'stage-output'});continue;}
+        if(inputArtifacts.has(ref.path)){reports.push({path:ref.path,kind:'unchanged-input',digest:inputArtifacts.get(ref.path)});continue;}
+        if(prior.has(ref.path)||next.has(ref.path)){reports.push({path:ref.path,kind:'application-source',digest:next.get(ref.path)?.digest??null,changed:changed.includes(ref.path)});continue;}
+        throw new Error('Worker returned artifacts outside assigned scope');
+      }
+      observation.reported_paths=reports;receipt.digest=digest(observation);
       const apply=async()=>{
         await dispatch.beforePublication?.();
+        assertInputsCurrent(workspace);
         // Host-side shared storage ledger, enforced before any canonical byte
         // is written. Fail-closed: a later merge conflict still counts the
         // attempted writes against the budget.

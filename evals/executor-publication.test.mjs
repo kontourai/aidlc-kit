@@ -177,3 +177,31 @@ test('worker quota termination retains observation and refuses publication as bu
  assert.equal(fs.readFileSync(path.join(f.workspace,'app.js'),'utf8'),'canonical implementation');
  assert.equal(f.executor.observed.length,1);assert.equal(f.executor.turnsStarted,1);
 });
+
+// Final path reports describe source and input references without enlarging
+// the host's stage-output publication set or source-write authority.
+async function reportedPathsFixture(t,{report,mutateInput=false,deleteInput=false,sourceAuthority=true,phase='draft',sourceScope=['source/workspace'],contribute=false,approvedInput=false}={}){
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'aidlc-reported-paths-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+ const workspace=path.join(root,'source'),controllerRoot=path.join(root,'controller');fs.mkdirSync(workspace);fs.mkdirSync(controllerRoot);fs.writeFileSync(path.join(workspace,'app.mjs'),'export const value=1;');
+ const input='.aidlc/artifacts/requirements/requirements.md',output='.aidlc/artifacts/code-generation/code-summary.md';fs.mkdirSync(path.dirname(path.join(workspace,input)),{recursive:true});fs.writeFileSync(path.join(workspace,input),'# Approved requirement\n');const originalInput=digest(fs.readFileSync(path.join(workspace,input)));
+ const request={workspace,source_root:workspace,run_id:'path-report-fixture',execution:{max_turns:2,timeout_s:30,model:'host-port'},engine_sandbox:{image:`sha256:${'a'.repeat(64)}`,artifact_root:path.join(root,'capture')}};
+ const workerRunner=async invocation=>{
+  if(sourceAuthority){fs.writeFileSync(path.join(invocation.workspace,'app.mjs'),'export const value=2;');fs.writeFileSync(path.join(invocation.workspace,'app.test.mjs'),'test source');}
+  if(mutateInput)fs.writeFileSync(path.join(invocation.workspace,input),'altered requirement');if(deleteInput)fs.unlinkSync(path.join(invocation.workspace,input));
+  const actualOutput=contribute?'.aidlc/contributions/code-generation/u/peer.md':output;fs.mkdirSync(path.dirname(path.join(invocation.workspace,actualOutput)),{recursive:true});fs.writeFileSync(path.join(invocation.workspace,actualOutput),'# Actual output\n');
+  return {observed:{container_id:'host-port',context_digest:digest(fs.readFileSync(invocation.contextFile)),stdin_digest:digest('fixture'),source_fork_digest:digest('fixture')},provider_thread_id:'host-port-path-report',terminal:{status:0,timeout:false,overflow:false},container_removed:true,usage:{complete:false},final:JSON.stringify({status:'completed',artifacts:(report??['app.mjs','app.test.mjs',input,actualOutput]).map(file=>({path:file})),verdict:'ready',findings:[]})};
+ };
+ const executor=createDockerExecutor({request,controllerRoot,workerRunner}),dispatch={request_digest:digest({report,mutateInput,deleteInput,sourceAuthority,phase,sourceScope}),stage:'code-generation',phase,role:contribute?'peer':'lead',unit:'u',mutable_resources:sourceScope,context:{stage:{workspace_requires:sourceAuthority},artifact_targets:[{path:output,unit:'u'}],upstream_artifacts:[{path:input,digest:originalInput}],...(approvedInput?{approved_plan_basis:[{path:input,digest:originalInput}]}:{}),...(sourceAuthority?{}:{planning_only:phase!=='review'})},basis:await executor.snapshotBasis({})};dispatch.expected_identity=await executor.admit(dispatch);
+ return {workspace,input,output,execute:()=>executor.execute(dispatch)};
+}
+test('final reports may identify authorized actual source and unchanged input without treating them as new stage outputs',async t=>{
+ const f=await reportedPathsFixture(t),result=await f.execute();assert.equal(result.status,'completed');assert.deepEqual(result.artifacts.map(ref=>ref.path),[f.output]);assert.deepEqual(result.changed_source,['app.mjs','app.test.mjs']);assert.deepEqual(result.observation.reported_paths.map(ref=>ref.kind),['application-source','application-source','unchanged-input','stage-output']);assert.equal(fs.readFileSync(path.join(f.workspace,f.input),'utf8'),'# Approved requirement\n');
+});
+test('unreported input modification or deletion refuses every source and artifact publication',async t=>{for(const change of [{mutateInput:true},{deleteInput:true}]){const f=await reportedPathsFixture(t,{...change,report:['app.mjs','.aidlc/artifacts/code-generation/code-summary.md']});await assert.rejects(f.execute(),/read-only input|assigned input unreadable/);assert.equal(fs.readFileSync(path.join(f.workspace,'app.mjs'),'utf8'),'export const value=1;');assert.equal(fs.readFileSync(path.join(f.workspace,f.input),'utf8'),'# Approved requirement\n');assert.equal(fs.existsSync(path.join(f.workspace,f.output)),false);}});
+test('foreign artifact/control paths and traversal remain outside the publication scope',async t=>{for(const file of ['.aidlc/artifacts/another-stage/foreign.md','.aidlc/state.md','../app.mjs','unknown.mjs']){const f=await reportedPathsFixture(t,{report:[file]});await assert.rejects(f.execute(),/outside assigned scope/);assert.equal(fs.readFileSync(path.join(f.workspace,'app.mjs'),'utf8'),'export const value=1;');assert.equal(fs.existsSync(path.join(f.workspace,f.output)),false);}});
+test('source path reports cannot bypass unit source jail or read-only input custody',async t=>{
+ const jailed=await reportedPathsFixture(t,{sourceScope:['other-directory']});await assert.rejects(jailed.execute(),error=>error.code==='unit_scope');assert.equal(fs.readFileSync(path.join(jailed.workspace,'app.mjs'),'utf8'),'export const value=1;');
+ const review=await reportedPathsFixture(t,{sourceAuthority:false,phase:'review',mutateInput:true,report:[]});await assert.rejects(review.execute(),/read-only input/);assert.equal(fs.readFileSync(path.join(review.workspace,review.input),'utf8'),'# Approved requirement\n');
+});
+
+test('an unchanged approved input may be reported but unreported changes cannot escape approval custody',async t=>{const unchanged=await reportedPathsFixture(t,{approvedInput:true});assert.equal((await unchanged.execute()).status,'completed');const modified=await reportedPathsFixture(t,{approvedInput:true,mutateInput:true,report:['app.mjs','.aidlc/artifacts/code-generation/code-summary.md']});await assert.rejects(modified.execute(),/changed approved plan/);assert.equal(fs.readFileSync(path.join(modified.workspace,'app.mjs'),'utf8'),'export const value=1;');});
