@@ -4,6 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { loadRun, runDir } from '@kontourai/flow';
+import {resolveDockerHostIdentity} from '@kontourai/flow-agents/docker-worker';
 import { digest } from './compile.mjs';
 import { readArtifact } from './artifacts.mjs';
 import { snapshotWorkspace } from './runtime.mjs';
@@ -52,15 +53,17 @@ export function createCommandRunner({workspace,controllerRoot,runId,image,curren
     try{
       check=prepareCheckWorkspace({workspace,controllerRoot,basis});
       const ownership=ownerId?['--label',`kontour.worker.owner=${ownerId}`]:[];
-      container=invoke(['docker','create','--name',name,'--label',`kontour.worker.run=${runId}`,...ownership,'--network','none','--read-only','--cap-drop','ALL','--security-opt','no-new-privileges','--pids-limit','256','--memory','2g','--cpus','2','--tmpfs','/tmp:rw,nosuid,size=1g','--mount',`type=bind,source=${check.workspace},target=/workspace`,'--workdir',path.posix.join('/workspace',relative.split(path.sep).join('/')),image,...argv]);
+      const identity=resolveDockerHostIdentity();
+      container=invoke(['docker','create','--name',name,'--label',`kontour.worker.run=${runId}`,...ownership,...identity.args,'--network','none','--read-only','--cap-drop','ALL','--security-opt','no-new-privileges','--pids-limit','256','--memory','2g','--cpus','2','--tmpfs','/tmp:rw,nosuid,size=1g','--mount',`type=bind,source=${check.workspace},target=/workspace`,'--workdir',path.posix.join('/workspace',relative.split(path.sep).join('/')),image,...argv]);
       const inspected=JSON.parse(invoke(['docker','inspect',container]))[0];if(inspected.Image!==image||inspected.Mounts.length!==1||inspected.Mounts[0].Destination!=='/workspace'||fs.realpathSync(inspected.Mounts[0].Source)!==check.workspace)throw new Error('Check container boundary mismatch');
+      if(identity.host_user&&(inspected.Config?.User!==identity.args[1]||inspected.HostConfig?.UsernsMode!==''))throw new Error('Check container host identity mismatch');
       const run=await loadRun(runId,controllerRoot);
       const captured=spawnSync(process.execPath,[flowCli(),'capture',runId,'--gate',`${currentStage?.()??run.state.current_step}-gate`,'--kind','command','--cwd',controllerRoot,'--timeout',String(timeoutMs),'--','docker','start','--attach',container],{encoding:'utf8',timeout:timeoutMs+15000,maxBuffer:1024*1024});if(captured.error)throw captured.error;
       const observedId=/^attached evidence: (\S+)$/m.exec(captured.stdout)?.[1];const updated=await loadRun(runId,controllerRoot);const entry=updated.manifest.evidence.find(value=>value.id===observedId);if(!entry?.stored_path)throw new Error(`No command capture: ${captured.stderr}`);
       const bytes=fs.readFileSync(path.join(runDir(runId,controllerRoot),entry.stored_path));if(digest(bytes)!==entry.sha256)throw new Error('Captured check receipt drift');const receipt=JSON.parse(bytes.toString('utf8'));if(JSON.stringify(receipt.command)!==JSON.stringify(['docker','start','--attach',container]))throw new Error('Check receipt belongs to another process');
       const stdout=receipt.stdout.content,stderr=receipt.stderr.content;if(Buffer.byteLength(stdout)+Buffer.byteLength(stderr)>maxOutputBytes)throw new Error('Check output exceeds sensor budget');
       check.assertCurrent();
-      return {exitCode:receipt.timed_out?null:receipt.exit_code,stdout,stderr,receipt:{...receipt,id:entry.id,digest:entry.sha256,image,command:argv,source_cwd:actual,canonical_source_digest:check.before.source_digest,check_input_digest:check.basis_digest,basis},evidence_refs:[{path:entry.stored_path,sha256:entry.sha256}]};
+      return {exitCode:receipt.timed_out?null:receipt.exit_code,stdout,stderr,receipt:{...receipt,id:entry.id,digest:entry.sha256,image,command:argv,source_cwd:actual,container_user:inspected.Config?.User??null,host_identity:identity,canonical_source_digest:check.before.source_digest,check_input_digest:check.basis_digest,basis},evidence_refs:[{path:entry.stored_path,sha256:entry.sha256}]};
     }finally{try{if(container)invoke(['docker','rm','-f',container]);}finally{check?.close();}}
   };
 }
