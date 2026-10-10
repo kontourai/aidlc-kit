@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { digest, readSnapshot } from './compile.mjs';
 import { readArtifact } from './artifacts.mjs';
+import {intakeQuestionnaireReply,materializeQuestionnaireReply,validateQuestionnaireVisit} from './questionnaire-replies.mjs';
 
 
 /** Host-only retained observations are signed under the same private controller
@@ -73,7 +74,7 @@ authorizeFinding:async()=>({authorized:false,reason:'finding_requires_specific_o
     if(denied)return {authorized:false,reason:'explicit_operator_denial',reference:`controller-decision:${denied.payload.id}`,decision_kind:'host-observed-operator-interaction',receipt:denied};
     const accepted=decisions.find(receipt=>receipt.payload.decision!=='deny');
     if(accepted)return {authorized:true,reference:`controller-decision:${accepted.payload.id}`,decision_kind:'host-observed-operator-interaction',receipt:accepted};
-    const response=input.purpose==='live-recomposition'?{authorized:false,reason:'live_recomposition_requires_operator_interaction'}:await policyAuthorize(input);if(response.authorized)return response;
+    const response=input.questionnaire?{authorized:false,reason:'questionnaire_requires_exact_operator_reply'}:input.purpose==='live-recomposition'?{authorized:false,reason:'live_recomposition_requires_operator_interaction'}:await policyAuthorize(input);if(response.authorized)return response;
     if(!DECISION_PURPOSES.includes(input.purpose))return response;
     const pendingRoot=path.join(authorityRoot,'pending');fs.mkdirSync(pendingRoot,{recursive:true,mode:0o700});
     const id=decisionBindingDigest(input),pendingFile=path.join(pendingRoot,`${id}.json`);
@@ -95,7 +96,9 @@ export function decisionBindingDigest(input){
 
 const DECISION_PURPOSES=['live-recomposition','profile-composition','stage-selection','source-change','summary-confirmation','input-confirmation','code-plan','construction-verification-command','construction-checkpoint','skeleton-checkpoint','review-disposition','deployment','operation'];
 /** Trusted CLI interaction. This observes an operator action, not a human signature. */
-export function recordControllerDecision({controllerRoot,pendingFile,reference,decision='approve',disposition}) {
+const questionnaireAdmissions=new WeakSet();
+export async function recordControllerInteraction(args){const pending=JSON.parse(fs.readFileSync(args.pendingFile,'utf8')),input=pending.payload?.input;if(input?.questionnaire)await validateQuestionnaireVisit({input,controllerRoot:args.controllerRoot});const admission={};questionnaireAdmissions.add(admission);try{return recordControllerDecision({...args,questionnaireAdmission:admission});}finally{questionnaireAdmissions.delete(admission);}}
+export function recordControllerDecision({controllerRoot,pendingFile,reference,decision='approve',disposition,questionnaireAdmission}) {
   if(typeof reference!=='string'||!reference.trim()||reference.length>2048||!['approve','deny'].includes(decision))throw new Error('Explicit decision and reference required');
   const root=fs.realpathSync(controllerRoot),authorityRoot=path.join(root,'authority'),file=fs.realpathSync(pendingFile),pendingRoot=fs.realpathSync(path.join(authorityRoot,'pending'));
   if(path.dirname(file)!==pendingRoot)throw new Error('Decision input must be a retained private pending request');
@@ -107,9 +110,12 @@ export function recordControllerDecision({controllerRoot,pendingFile,reference,d
   const findings=input.findings??input.decision?.units?.flatMap(unit=>unit.findings??[])??[];
   if(decision==='approve'&&dissent.some(objection=>objection.kind==='judgment')&&disposition?.accept_judgment_dissent!==true)throw new Error('Judgment dissent requires explicit operator disposition');
   if(decision==='approve'&&findings.some(finding=>finding.status==='open'&&!disposition?.accepted_finding_ids?.includes(finding.id)))throw new Error('Open findings require explicit operator disposition by id');
+  if(input.questionnaire&&!questionnaireAdmissions.has(questionnaireAdmission))throw new Error('Questionnaire decisions require the ordinary current-visit CLI interaction');
+  if(decision==='approve'&&input.questionnaire)disposition=intakeQuestionnaireReply({input,disposition});
   const payload={version:'1.0',id:randomUUID(),kind:'controller-decision',issuer:fingerprint,reference,decision,decision_kind:'host-observed-operator-interaction',request_digest:input.request_digest,purpose:input.purpose,stage:input.stage,input_digest:decisionBindingDigest(input),disposition:disposition??null,issued_at:new Date().toISOString()};
   const receipt={payload,signature:sign(null,Buffer.from(JSON.stringify(payload)),privateKey).toString('base64')};
   fs.writeFileSync(path.join(authorityRoot,`${payload.id}.input.json`),JSON.stringify(input,null,2)+'\n',{flag:'wx',mode:0o600});fs.writeFileSync(path.join(authorityRoot,`${payload.id}.json`),JSON.stringify(receipt)+'\n',{flag:'wx',mode:0o600});
+  if(decision==='approve'&&input.questionnaire)materializeQuestionnaireReply({input,receipt});
   return {reference:`controller-decision:${payload.id}`,decision_kind:'host-observed-operator-interaction',receipt};
 }
 
@@ -130,6 +136,7 @@ export function buildExecutionPrompt({dispatch,workspace,sourceDigest}){
       'Reference prior findings by their unchanged ids. A review covers the frozen source and artifact basis. Do not weaken tests or declared quality targets to obtain a pass.',
       'Native generated metadata is adapted to this controller. If traceability.json is a required output, supply a candidate mapping {stage, unit (only for a real unit), upstream_ids:[actual IDs], coverage:[{id,status:"OK"|"GAP"|"ORPHAN"|"Deferred"|"N/A",target}], reverse:[{id,status,target}]}. Read actual upstream IDs and existing implementation targets; never invent IDs or claim the mapping proves semantic correctness. The host sensor validates this candidate instead of running native engine commands.',
       context.approved_summary_basis?'Summary question bytes have current-basis operator confirmation; consume them and preserve those exact bytes.':'Do not claim unconfirmed summary assumptions are approved.',
+      context.operator_questionnaire_reply?`Actual host-observed operator answers, bound to this questionnaire and signed decision: ${JSON.stringify(context.operator_questionnaire_reply)}. Consume these as operator input; retain the question IDs and exact answered question bytes. Approval alone supplies no missing answers.`:'',
       'For every Markdown artifact use the pinned required sections and source/requirement ids. Preserve real questions and assumptions. Questions awaiting operator policy are not answers supplied by the model.',
       context.learning_diary?`${context.learning_protocol} Diary: ${context.learning_diary}`:'Learning ritual is off or this is a revision.',
       `Task: ${context.task??''}`,`Actual required output paths: ${JSON.stringify(targets)}`,

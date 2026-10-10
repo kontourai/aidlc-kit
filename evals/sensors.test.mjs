@@ -401,3 +401,15 @@ test('actual source-write checks union with declared imports without duplicate e
   assert.equal(result.checks.filter(c => c.id === 'type-check').length, 1);
   assert.equal(check(result, 'linter').trigger_origin, 'native-stage-contract');
 });
+
+
+test('pinned None assumption sentinel is allowed only as the entire Assumptions section block',async t=>{
+ const positive=claimFixture(t);positive.put('out/intent-statement.md','## Intent\nBuild a calendar. [desc]\n\n## Assumptions & Open Questions\nNone.');assert.equal(check(await positive.run(),'claim-sources').status,'pass');
+ for(const body of ['## Intent\nNone.\n\n## Assumptions & Open Questions\nNone.','## Intent\nBuild a calendar. [desc]\n\n## Assumptions & Open Questions\nNone. More inferred facts.','## Intent\nBuild a calendar. [desc]\n\n## Assumptions & Open Questions\n- Unconfirmed. [assumption]']){const negative=claimFixture(t);negative.put('out/intent-statement.md',body);assert.equal(check(await negative.run(),'claim-sources').status,'fail');}
+});
+
+
+test('adjacent declared citation tags retain provenance while inline and defined reference links refuse',async t=>{
+ for(const tags of ['[Q1] [Q1]','[Q1][Q1]']){const f=claimFixture(t);f.put('out/stakeholder-map.md',`## Stakeholders\nConfirmed users. ${tags}\n\n## Assumptions & Open Questions\nNone.`);assert.equal(check(await f.run(),'claim-sources').status,'pass');}
+ for(const tags of ['[Q1](https://example.invalid)','[Q1][unknown]','[Q1][Q99]','[Q1][Q1]\n\n[Q1]: https://example.invalid','[Q1][Q1](https://example.invalid)','[Q1][Q1][unknown]']){const f=claimFixture(t);f.put('out/stakeholder-map.md',`## Stakeholders\nConfirmed users. ${tags}\n\n## Assumptions & Open Questions\nNone.`);assert.equal(check(await f.run(),'claim-sources').status,'fail');}
+});

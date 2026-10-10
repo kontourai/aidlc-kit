@@ -247,7 +247,13 @@ function claims(stage, outputs, context, read) {
   const findings = [], register = new Set(), answered = new Set();
   // Reject syntax whose rendering this port cannot prove. This deliberately
   // errs toward requesting a visible citation rather than accepting hidden text.
-  const ambiguous = (text) => /<[^>]*>|^\s*\[(?!Answer\])[^\]]+\]:|\[[^\]]+\]\s*(?:\(|\[)|\\\[|&#?\w+;/m.test(text.replace(/<!--[^]*?(?:-->|$)/g, ''));
+  const ambiguous = (text) => {
+    const visible=text.replace(/<!--[^]*?(?:-->|$)/g, '');
+    if(/<[^>]*>|^\s*\[(?!Answer\])[^\]]+\]:|\\\[|&#?\w+;/m.test(visible))return true;
+    const source=/^(?:desc|scope|Q\d+|memory:[\w.-]+|assumption)$/;
+    for(const match of visible.matchAll(/\[([^\]]+)\](\s*)(?=(\(|\[([^\]]+)\]))/g))if(match[3]==='('||!source.test(match[1])||!source.test(match[4]))return true;
+    return false;
+  };
   if (ambiguous(q)) findings.push('Questions contain unsupported HTML or reference-link syntax');
   for (const line of section(q, 'Sources')) {
     const match = /^\s*[-*+]\s+\[(desc|scope|memory:[\w.-]+)\]\s+(.+)$/.exec(line);
@@ -302,6 +308,7 @@ function claims(stage, outputs, context, read) {
     for (const s of sections(doc.text)) {
       if (s.rawName === 'Review') continue;
       for (const block of blocks(s.lines)) {
+        if(s.name==='Assumptions & Open Questions'&&/^None\.?$/i.test(block.trim()))continue;
         if (/^\s*#|^\s*\|?[\s:|-]+\|?\s*$/.test(block)) continue;
         if (s.name === 'Sources' && block === `- [scope] Workflow-selected scope: \`${scope}\`.` && register.has('scope')) continue;
         const visible = block.replace(/(`+)(?!`)([^]*?)\1(?!`)/g, '');

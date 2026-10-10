@@ -124,6 +124,7 @@ export async function dispatchStage({ stage, units, executor, context = {}, poli
     const executionBudget = bounded(policy.maxExecutions, 128, 2048, 'maxExecutions');
     const declaredReviewBudget = bounded(stage.reviewer_max_iterations, 2, 16, 'reviewer_max_iterations');
     const reviewBudget = bounded(policy.maxReviewIterations, declaredReviewBudget, 16, 'maxReviewIterations');
+    const inputRevisionBudget=bounded(policy.maxInputRevisions,4,16,'maxInputRevisions');
     if (stage.reviewer !== undefined && (!nonempty(stage.reviewer) || (stage.review_class !== undefined && !['advisory', 'adversarial'].includes(stage.review_class)))) fail('invalid_review', 'Invalid reviewer declaration');
     manifest = validateUnits(units ?? stage.units ?? (stage.for_each ? null : [{ id: 'stage', depends_on: [], mutable_resources: ['stage-artifacts'] }]));
     if (context.unit && !manifest.some(unit => unit.id === context.unit)) fail('unknown_unit', 'Selected unit is not in the authoritative manifest');
@@ -131,7 +132,7 @@ export async function dispatchStage({ stage, units, executor, context = {}, poli
     const selected = context.unit ? manifest.filter(unit => unit.id === context.unit) : manifest;
     if (context.unit && selected[0].depends_on?.some(id => !context.completedUnits?.includes(id))) fail('unit_not_ready', 'Selected unit has incomplete dependencies');
     outcome.units = selected.map(unit => ({ id: unit.id, status: 'pending', receipts: [], findings: [], reviews: [], basis: null, reason: null, dissent: [] }));
-    outcome.contract_digest=hash({stage,units:selected,context,executionBudget,reviewBudget,requiresClaim:policy.requiresClaim===true});
+    outcome.contract_digest=hash({stage,units:selected,context,executionBudget,reviewBudget,inputRevisionBudget,requiresClaim:policy.requiresClaim===true});
     if(resume){
       resume=structuredClone(resume);
       if(typeof executor.verifyResume!=='function'||await executor.verifyResume(structuredClone(resume))!==true)fail('unverified_resume','Retained dispatch requires host-verified observation custody');
@@ -203,7 +204,7 @@ export async function dispatchStage({ stage, units, executor, context = {}, poli
         if (executor.claim) claim = await executor.claim({ stage: stage.slug, unit: structuredClone(unit), signal: controller.signal, canonicalClaim: context.claim });
         if (policy.requiresClaim && !claim && !context.claim) fail('claim_required', 'Host did not observe canonical Flow claim admission');
         const dependencies = (unit.depends_on ?? []).map(id => ({ id, basis: records.get(id)?.basis ?? context.dependencyBasis?.[id], artifacts: records.get(id)?.artifacts ?? context.dependencyArtifacts?.[id] }));
-        const unitContext = { ...(context.shared ?? {}), ...(context.units?.[unit.id] ?? {}), ...(unit.context ?? {}), dependencies };
+        let unitContext = { ...(context.shared ?? {}), ...(context.units?.[unit.id] ?? {}), ...(unit.context ?? {}), dependencies };
         const basisKey = hash({stage, unit, context: unitContext});
         let initialBasis = await executor.loadBasis?.(basisKey);
         if (!initialBasis) { initialBasis = await snapshot(unit, []); await executor.saveBasis?.(basisKey, initialBasis); }
@@ -248,12 +249,13 @@ export async function dispatchStage({ stage, units, executor, context = {}, poli
           delete record.continuation;return true;
         }
         if(resumingDecision){
-          basis=basisValid(record.basis);artifacts=structuredClone(record.artifacts);authorIdentities=record.receipts.filter(receipt=>receipt.phase!=='review').map(receipt=>receipt.identity);record.status='awaiting_decision';await decide(pendingReason);
+          basis=basisValid(record.basis);artifacts=structuredClone(record.artifacts);authorIdentities=record.receipts.filter(receipt=>receipt.phase!=='review').map(receipt=>receipt.identity);record.status='awaiting_decision';if(record.continuation?.phase!=='before-review')await decide(pendingReason);else{record.status='running';record.reason=null;}
           if(record.status==='awaiting_decision')return;
           const continuation=record.continuation;
           if(continuation?.phase==='review-decision'){if(pendingReason!=='advisory_review'||stage.review_class!=='advisory'||!stage.reviewer||record.reviews.length!==1||!isDeepStrictEqual(record.reviews[0].basis,basis))fail('invalid_resume','Terminal disposition lacks its declared current advisory review');delete record.continuation;return;}
-          if(stage.mode!=='mob'||pendingReason!=='mob_judgment'||!['mob-contribution-decision','mob-dialogue-decision'].includes(continuation?.phase))fail('invalid_resume','Unknown pending dispatch continuation');
-          consumePhaseDecision();if(!await continueMob(continuation.contributions,continuation.dialogue))return;
+          if(continuation?.phase==='before-review'){if(!executor.beforeReview)fail('invalid_resume','Pending input checkpoint lacks its host intake port');}
+          else if(stage.mode!=='mob'||pendingReason!=='mob_judgment'||!['mob-contribution-decision','mob-dialogue-decision'].includes(continuation?.phase))fail('invalid_resume','Unknown pending dispatch continuation');
+          if(continuation?.phase!=='before-review'){consumePhaseDecision();if(!await continueMob(continuation.contributions,continuation.dialogue))return;}
         }
         let draft;
         if(!resumingDecision){
@@ -283,6 +285,24 @@ export async function dispatchStage({ stage, units, executor, context = {}, poli
             }
           }
         }
+        }
+        if(executor.beforeReview){
+          if(unitContext.operator_questionnaire_reply)record.initial_questionnaire_reply=structuredClone(unitContext.operator_questionnaire_reply);if(unitContext.operator_questionnaire_receipt){record.initial_questionnaire_receipt=structuredClone(unitContext.operator_questionnaire_receipt);record.initial_questionnaire_subject=structuredClone(unitContext.operator_questionnaire_subject);}
+          while(true){
+            const before=structuredClone(basis),response=await executor.beforeReview({stage:structuredClone(stage),unit:structuredClone(unit),basis:before,artifacts:structuredClone(artifacts),record:structuredClone(record),context:structuredClone(unitContext),signal:controller.signal});
+            if(!response||!['accepted','awaiting_input','revise'].includes(response.status))fail('invalid_input_checkpoint','Host input checkpoint returned unknown disposition');
+            const nextArtifacts=response.artifacts??artifacts;basis=await snapshot(unit,nextArtifacts);artifacts=structuredClone(nextArtifacts);
+            if(before.source_digest!==basis.source_digest)fail('stale_input_checkpoint','Host input checkpoint changed source bytes');
+            if(response.state)record.input_state=structuredClone(response.state);
+            if(response.prior_operator_observation){record.input_transform_history??=[];record.input_transform_history.push(structuredClone(response.prior_operator_observation));}
+            if(response.host_derivation||response.operator_receipt){record.input_transform_history??=[];const identity=hash({derivation:response.host_derivation?.envelope,receipt:response.operator_receipt?.payload?.id});if(!record.input_transform_history.some(entry=>entry.identity===identity))record.input_transform_history.push({identity,...structuredClone(response)});}
+            if(response.execution_context)unitContext={...unitContext,...structuredClone(response.execution_context)};
+            if(response.status==='accepted'){delete record.continuation;record.before_review=structuredClone(response);break;}
+            record.before_review=structuredClone(response);record.basis=structuredClone(basis);record.artifacts=structuredClone(artifacts);
+            if(response.status==='awaiting_input'){record.continuation={phase:'before-review'};record.status='awaiting_decision';record.reason='operator_input_required';record.resume_decision_checked=true;return;}
+            record.input_revisions=(record.input_revisions??0)+1;if(record.input_revisions>inputRevisionBudget)fail('input_revision_budget','Operator input revision budget exhausted');
+            await author('revise-input',stage.lead_agent,{iteration:record.input_revisions,context:{...unitContext,...response.revision_context},input_authority:response.authority_reference});
+          }
         }
         if ((stage.produces?.length ?? 0) && !artifacts.length) fail('missing_artifacts', 'Stage produced no observed output artifacts');
         if (stage.reviewer) {

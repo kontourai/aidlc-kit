@@ -19,6 +19,9 @@ import {resolveComposition} from './composition.mjs';
 import {boundDefinition} from './definition.mjs';
 import {verifyRecompositionLedger,pendingRecomposition,childExecutionSnapshot} from './recomposition.mjs';
 import {withControllerLock} from './controller-lock.mjs';
+import {retainedQuestionnaire,questionnaireSubject,materializeQuestionnaireReply,questionnaireOverlayBasis} from './questionnaire-replies.mjs';
+import {verifyControllerCheckpoint} from './authority.mjs';
+import {createIntentInputCheckpoint} from './intent-inputs.mjs';
 import {retainedDispatch,checkpointRetryIdentity,checkpointContextBinding,loadRetainedDispatch,saveRetainedDispatch} from './dispatch-checkpoints.mjs';
 
 const safeId = value => typeof value === 'string' && /^[a-z0-9][a-z0-9._-]{0,127}$/.test(value);
@@ -140,7 +143,7 @@ async function runAidlcUnlocked({request,executor,commandRunner,authority,contro
   const executions=[];let failure=null,units=null;
   const refuse=async(stage,detail)=>{
     const prior=records.find(r=>r.stage===stage);const record={stage,profile,failure:detail,artifacts:[],sensors:{status:'fail',checks:[]},evidence:{},invalidated:false};record.digest=digest(record);
-    if(['authority_required','awaiting_decision','mob_judgment','advisory_review'].includes(detail.reason)){record.waiting=true;records=records.filter(r=>r.stage!==stage);records.push(record);write(recordsFile,records);return;}
+    if(['authority_required','awaiting_decision','operator_input_required','mob_judgment','advisory_review'].includes(detail.reason)){record.waiting=true;records=records.filter(r=>r.stage!==stage);records.push(record);write(recordsFile,records);return;}
     record.evidence.completion=await attachObservation({controllerRoot,runId:request.run_id,stage,status:'fail',record,supersede:prior?.invalidation?.evidence_id??prior?.evidence?.completion?.evidence_id});
     if(snapshot.stages.find(s=>s.slug===stage)?.reviewer)record.evidence.review=await attachObservation({controllerRoot,runId:request.run_id,stage,kind:'review',status:'fail',record});
     records=records.filter(r=>r.stage!==stage);records.push(record);write(recordsFile,records);await evaluateRun(request.run_id,{cwd:controllerRoot});
@@ -212,7 +215,12 @@ async function runAidlcUnlocked({request,executor,commandRunner,authority,contro
     }
     if(stage.for_each)for(const unit of units)context.units[unit.id]={artifact_targets:artifacts.filter(a=>a.unit===unit.id),upstream_artifacts:allArtifacts.filter(a=>!a.unit||a.unit===unit.id),learning_diary:context.shared.learning_diaries?.find(diary=>diary.unit===unit.id)?.path??null};
     const initialContext=structuredClone(context),reviewBinding=()=>({request_digest:binding.request_digest,stage,context:initialContext,testing_contract_digest:testing.contract_digest,source_digest:snapshotWorkspace(workspace).source_digest}),reviewBasis=()=>currentRefs(workspace,[...allArtifacts,...artifacts]);
-    const retainedReview=stage.phase==='initialization'?null:loadRetainedDispatch({controllerRoot,kind:'review',stage:stageId,binding:reviewBinding(),admission:checkpointRetryIdentity(run),basis:reviewBasis()});
+    let reviewCurrent=reviewBasis(),operatorDerived=false;
+    const reviewFile=path.join(controllerRoot,'review-checkpoints',`${stageId}.json`);
+    if(fs.existsSync(reviewFile)){const stored=json(reviewFile);if(!verifyControllerCheckpoint({controllerRoot,checkpoint:stored.checkpoint,envelope:stored.envelope}))throw new Error('Retained review checkpoint changed');const original=questionnaireOverlayBasis({controllerRoot,checkpoint:stored.checkpoint,basis:reviewCurrent,authority});if(original){reviewCurrent=original;operatorDerived=true;}}
+    const retainedReview=stage.phase==='initialization'?null:loadRetainedDispatch({controllerRoot,kind:'review',stage:stageId,binding:reviewBinding(),admission:checkpointRetryIdentity(run),basis:reviewCurrent});
+    if(retainedReview&&operatorDerived)for(const record of retainedReview.prepared.units){if(record.continuation?.phase!=='before-review')continue;const old=structuredClone({basis:record.basis,artifacts:record.artifacts});record.operator_input_derivations??=[];record.operator_input_derivations.push({original:old,input:record.before_review.input});record.artifacts=record.artifacts.map(ref=>({...ref,digest:readArtifact(workspace,ref.path).digest}));record.basis={...record.basis,artifacts:record.basis.artifacts.map(ref=>({...ref,digest:readArtifact(workspace,ref.path).digest}))};}
+
     if(retainedReview)context=retainedReview.context;
     if(!retainedReview&&(request.parameters?.source_write_stages??[]).includes(stageId)){
       const input={purpose:'source-change',stage:stageId,basis:snapshotWorkspace(workspace).source_digest,request_digest:binding.request_digest};const grant=await authority?.authorize?.(input);
@@ -225,20 +233,27 @@ async function runAidlcUnlocked({request,executor,commandRunner,authority,contro
       dispatched={status:'completed',units:[],executions:0,bootstrap:{workspace_digest:snapshotWorkspace(workspace).source_digest,definition_digest:binding.definition_digest}};
     }else{
       if(!retainedReview){
-      const questions=summaryTargets(stage,artifacts,settings);
+      const questions=stageId==='intent-capture'?artifacts.filter(ref=>ref.id.endsWith('-questions')):summaryTargets(stage,artifacts,settings);
       if(questions.length){
         const checkpoint={...stage,workspace_requires:false,reviewer:undefined,produces:questions.map(a=>a.id),optional_produces:[]};
         const checkpointContext=structuredClone(context);checkpointContext.shared.planning_only=true;checkpointContext.shared.summary_only=true;checkpointContext.shared.artifact_targets=questions;
         for(const entry of Object.values(checkpointContext.units))entry.artifact_targets=entry.artifact_targets.filter(a=>a.id.endsWith('-questions'));
-        const retained=await retainedDispatch({controllerRoot,kind:'summary',stage:stageId,binding:{request_digest:binding.request_digest,checkpoint,context:checkpointContextBinding(checkpointContext),source_digest:snapshotWorkspace(workspace).source_digest},admission:checkpointRetryIdentity(run),observeBasis:()=>currentRefs(workspace,questions),execute:()=>dispatchStage({stage:checkpoint,units:stage.for_each?units:undefined,executor,context:checkpointContext,policy:request.parameters?.dispatch_policy??{},signal})});
-        const prepared=retained.dispatch,basis=retained.basis;
+        const questionnairePurpose=stageId==='intent-capture'&&settings.summary_confirmation==='off'?'input-confirmation':'summary-confirmation';
+        const summaryBinding={request_digest:binding.request_digest,checkpoint,context:checkpointContextBinding(checkpointContext),source_digest:snapshotWorkspace(workspace).source_digest},admission=checkpointRetryIdentity(run);
+        const answered=retainedQuestionnaire({controllerRoot,kind:'summary',stage:stageId,binding:summaryBinding,admission,workspace,authority,requestDigest:binding.request_digest,purpose:questionnairePurpose});
+        const retained=answered?{dispatch:answered.dispatch,basis:answered.basis,replayed:true}:await retainedDispatch({controllerRoot,kind:'summary',stage:stageId,binding:summaryBinding,admission,observeBasis:()=>currentRefs(workspace,questions),execute:()=>dispatchStage({stage:checkpoint,units:stage.for_each?units:undefined,executor,context:checkpointContext,policy:request.parameters?.dispatch_policy??{},signal})});
+        const prepared=retained.dispatch;let basis=retained.basis;
         if(!retained.replayed)executions.push(...prepared.units.flatMap(u=>u.receipts??[]));
         if(prepared.status!=='completed'){failure={stage:stageId,reason:'summary_failed',detail:prepared};await refuse(stageId,failure);break;}
         if(basis.length!==questions.length||basis.some(ref=>!readArtifact(workspace,ref.path).text.trim())){failure={stage:stageId,reason:'approval_basis_incomplete'};await refuse(stageId,failure);break;}
-        const input={purpose:'summary-confirmation',stage:stageId,basis,source_digest:snapshotWorkspace(workspace).source_digest,request_digest:binding.request_digest};
+        const subject=answered?.input.questionnaire??questionnaireSubject({workspace,basis,producer:prepared,checkpointBinding:digest({kind:'summary',stage:stageId,binding:summaryBinding,admission}),admission});
+        if(!(questionnairePurpose==='input-confirmation'&&!subject)){
+        const input=answered?.input??{purpose:questionnairePurpose,run_id:request.run_id,stage:stageId,basis,source_digest:snapshotWorkspace(workspace).source_digest,request_digest:binding.request_digest,...(subject?{questionnaire:subject}:{})};
         const grant=await authority?.authorize?.(input);
         if(!grant?.authorized||authority.verify?.(grant.receipt,input)!==true){failure={stage:stageId,reason:'authority_required',detail:grant};await refuse(stageId,failure);break;}
+        if(subject){context.shared.operator_questionnaire_reply=materializeQuestionnaireReply({input,receipt:grant.receipt});context.shared.operator_questionnaire_receipt=grant.receipt;context.shared.operator_questionnaire_subject=input;basis=currentRefs(workspace,questions);}
         context.shared.approved_summary_basis=basis;context.shared.summary_authority_reference=grant.reference;
+        }
       }
       if(stageId==='code-generation'){
         assertTestingPolicyCurrent(testing,testingInput);
@@ -285,7 +300,7 @@ async function runAidlcUnlocked({request,executor,commandRunner,authority,contro
       }
       let unitFlow,inputReplayed=Boolean(retainedReview);
       try{
-        let stageExecutor={...executor,async execute(dispatch){return executor.execute({...dispatch,beforePublication:async()=>{await dispatch.beforePublication?.();assertTestingPolicyCurrent(testing,testingInput);}});}};
+        let stageExecutor={...executor,beforeReview:createIntentInputCheckpoint({request,controllerRoot,authority,settings,requestDigest:binding.request_digest,admission:checkpointRetryIdentity(run)}),async execute(dispatch){return executor.execute({...dispatch,beforePublication:async()=>{await dispatch.beforePublication?.();assertTestingPolicyCurrent(testing,testingInput);}});}};
         if(stage.for_each){unitFlow=await createUnitFlow({controllerRoot,parentRunId:request.run_id,stage,units,snapshotBasis:executor.snapshotBasis});stageExecutor=unitFlow.bindExecutor(stageExecutor);}
         const historicalFile=unitFlow?path.join(controllerRoot,'unit-dispatch',`${unitFlow.runId}.json`):null;
         const executeStage=async()=>{
@@ -302,8 +317,13 @@ async function runAidlcUnlocked({request,executor,commandRunner,authority,contro
         else if(stageId==='intent-capture'){
           const retained=await retainedDispatch({controllerRoot,kind:'input',stage:stageId,binding:{request_digest:binding.request_digest,stage,context:checkpointContextBinding(context),source_digest:snapshotWorkspace(workspace).source_digest},admission:checkpointRetryIdentity(run),observeBasis:()=>currentRefs(workspace,artifacts),execute:executeStage});dispatched=retained.dispatch;inputReplayed=retained.replayed;
         }else dispatched=await executeStage();
-        if(dispatched.status==='awaiting_decision'){
-          if(!retainedReview)saveRetainedDispatch({controllerRoot,kind:'review',stage:stageId,binding:reviewBinding(),admission:checkpointRetryIdentity(run),basis:reviewBasis(),dispatch:dispatched,context});
+        if(retainedReview?.prepared.units.some(record=>record.continuation?.phase==='before-review')){
+          const prior=structuredClone(dispatched);dispatched=await dispatchStage({stage,units:stage.for_each?units:undefined,executor:{...stageExecutor,verifyResume:observed=>digest(observed)===digest(prior)},context,policy:{...request.parameters?.dispatch_policy,...(unitFlow?{requiresClaim:true}:{})},signal,resume:prior});
+        }
+        if(dispatched.status==='awaiting_decision'&&dispatched.units.some(record=>record.continuation?.phase==='before-review')){
+          saveRetainedDispatch({controllerRoot,kind:'review',stage:stageId,binding:reviewBinding(),admission:checkpointRetryIdentity(run),basis:reviewBasis(),dispatch:dispatched,context});dispatched.pending=dispatched.units.find(record=>record.continuation?.phase==='before-review')?.before_review?.pending??null;
+        }else if(dispatched.status==='awaiting_decision'){
+          saveRetainedDispatch({controllerRoot,kind:'review',stage:stageId,binding:reviewBinding(),admission:checkpointRetryIdentity(run),basis:reviewBasis(),dispatch:dispatched,context});
           const input={purpose:'review-disposition',stage:stageId,decision:dispatched,request_digest:binding.request_digest};const grant=await authority?.authorize?.(input);
           if(grant?.authorized&&authority.verify?.(grant.receipt,input)===true){
             const prior=structuredClone(dispatched),approved=new Map(prior.units.filter(record=>record.status==='awaiting_decision').map(record=>[record.id,record]));
@@ -331,7 +351,7 @@ async function runAidlcUnlocked({request,executor,commandRunner,authority,contro
       }catch(error){failure={stage:stageId,reason:error.code==='execution_budget'||error.code==='storage_budget'?'budget_exhausted':'execution_failed',detail:{message:error.message,code:error.code??null}};await refuse(stageId,failure);break;}finally{await unitFlow?.close();}
       if(!inputReplayed)executions.push(...dispatched.units.flatMap(u=>u.receipts??[]));executions.push(...(dispatched.final_verification?.dispatch?.units??[]).flatMap(u=>u.receipts??[]));
       if(dispatched.status!=='completed'){failure={stage:stageId,reason:dispatched.reason==='execution_budget'||dispatched.reason==='storage_budget'?'budget_exhausted':dispatched.reason??dispatched.status,detail:dispatched};await refuse(stageId,failure);break;}
-      if(context.shared.approved_summary_basis?.some(ref=>readArtifact(workspace,ref.path).digest!==ref.digest)){failure={stage:stageId,reason:'approved_summary_changed'};await refuse(stageId,failure);break;}
+      if(context.shared.approved_summary_basis?.some(ref=>readArtifact(workspace,ref.path).digest!==ref.digest&&!dispatched.units.some(record=>{const derived=record.before_review?.host_derivation;let expected=ref.digest;for(const entry of record.input_transform_history??[]){const derivation=entry.host_derivation;if(derivation&&verifyControllerCheckpoint({controllerRoot,checkpoint:derivation.checkpoint,envelope:derivation.envelope})&&derivation.checkpoint.original.path===ref.path&&derivation.checkpoint.original.digest===expected)expected=derivation.checkpoint.derived.digest;if(entry.operator_receipt&&entry.input&&authority.verify(entry.operator_receipt,entry.input))for(const doc of entry.operator_reply?.documents??[])if(doc.path===ref.path&&doc.original_digest===expected)expected=doc.reply_digest;}return expected===readArtifact(workspace,ref.path).digest;}))){failure={stage:stageId,reason:'approved_summary_changed'};await refuse(stageId,failure);break;}
       assertTestingPolicyCurrent(testing,testingInput);
       if(context.shared.approved_plan_basis?.some(ref=>readArtifact(workspace,ref.path).digest!==ref.digest)){failure={stage:stageId,reason:'approved_plan_changed'};await refuse(stageId,failure);break;}
     }
@@ -380,5 +400,5 @@ async function runAidlcUnlocked({request,executor,commandRunner,authority,contro
   }
   const run=await loadRun(request.run_id,controllerRoot);
   return {schema_version:'1.0',run_id:request.run_id,profile,ceremony:settings,...(composition?{composition}:{}),definition_digest:binding.definition_digest,upstream_commit:snapshot.upstream.commit,
-    status:signal?.aborted?'cancelled':run.state.status==='completed'?'completed':failure?.reason==='authority_required'||failure?.reason==='awaiting_decision'||failure?.reason==='mob_judgment'||failure?.reason==='advisory_review'?'waiting':failure?.reason==='budget_exhausted'||visits>stageLimit?'budget_exhausted':'failed',failure,records,executions,canonical_state:run.state,semantic_quality:'not_verified'};
+    status:signal?.aborted?'cancelled':run.state.status==='completed'?'completed':failure?.reason==='authority_required'||failure?.reason==='awaiting_decision'||failure?.reason==='operator_input_required'||failure?.reason==='mob_judgment'||failure?.reason==='advisory_review'?'waiting':failure?.reason==='budget_exhausted'||visits>stageLimit?'budget_exhausted':'failed',failure,records,executions,canonical_state:run.state,semantic_quality:'not_verified'};
 }
