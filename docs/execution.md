@@ -108,5 +108,7 @@ it. A registered operator policy may explicitly include this purpose. It is
 host policy or an observed operator interaction, never a fabricated human
 signature. Composition approval does not approve input answers, source writes,
 code plans or deployment. Durable resume verifies the retained approval and
-refuses altered proposals or definition bindings. Changing a running plan
-requires a new run; mid-run adaptive recomposition is not claimed.
+refuses altered proposals or definition bindings. Changing pending stages of a
+running plan requires a separately bound live recomposition decision.
+
+Live pending-stage add/skip uses the ordinary signed operator inbox and canonical Flow amendment ledger; see [recomposition.md](recomposition.md). The original request and provider budgets are retained.

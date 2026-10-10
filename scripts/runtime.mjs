@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import { startRun, loadRun, attachEvidence, evaluateRun, validateDefinition } from '@kontourai/flow';
+import { startRun, loadRun, attachEvidence, evaluateRun, validateDefinition, definitionDigest } from '@kontourai/flow';
 import { validateTrustBundle, buildTrustReport } from '@kontourai/surface';
 import { readSnapshot, compileProfile, digest, requestBindingDigest } from './compile.mjs';
 import { readArtifact, observeStage, projectInvalidation } from './artifacts.mjs';
@@ -16,6 +16,9 @@ import { constructionBlock, executeConstruction } from './construction.mjs';
 import {constructionCheckpointPolicy} from './construction-checkpoints.mjs';
 import {resolveTestingContract,assertTestingPolicyCurrent,validateTestingPlans,stampTestingPlan} from './testing-posture.mjs';
 import {resolveComposition} from './composition.mjs';
+import {boundDefinition} from './definition.mjs';
+import {verifyRecompositionLedger,pendingRecomposition,childExecutionSnapshot} from './recomposition.mjs';
+import {withControllerLock} from './controller-lock.mjs';
 
 const safeId = value => typeof value === 'string' && /^[a-z0-9][a-z0-9._-]{0,127}$/.test(value);
 const inside = (root, file) => { const rel=path.relative(root,file);return rel!== '..'&&!rel.startsWith(`..${path.sep}`)&&!path.isAbsolute(rel); };
@@ -67,17 +70,6 @@ export async function refreshArtifactValidity({controllerRoot,runId,workspace,re
   return {projection,invalidated,deferred};
 }
 
-function boundDefinition(snapshot,profile,runId,projectType,omitted,settings){
-  const selected=structuredClone(snapshot);selected.stages=selected.stages.map(stage=>effectiveStage(stage,settings));selected.profiles[profile].stages=selected.profiles[profile].stages.filter(id=>!omitted.has(id));
-  const compiled=compileProfile(selected,profile,{projectType});
-  for(const [i,step]of compiled.flow.steps.entries()){
-    const source=selected.stages.find(s=>s.slug===step.id);const prior=compiled.flow.steps.slice(0,i).map(s=>s.id);
-    const artifactDeps=(source.consumes??[]).flatMap(input=>selected.stages.filter(s=>prior.includes(s.slug)&&[...(s.produces??[]),...(s.optional_produces??[])].includes(input.artifact)).slice(-1).map(s=>s.slug));
-    step.needs=[...new Set([...(step.needs??[]),...artifactDeps])];
-    for(const expectation of compiled.flow.gates[`${step.id}-gate`].expects)expectation.bundle_claim.subjectId=`${runId}/${step.id}`;
-  }
-  return {flow:validateDefinition(compiled.flow),stageIds:compiled.stages,selectedSnapshot:selected};
-}
 
 export function stageContext(snapshot,profile,stage,workspace,allArtifacts,request){
   const upstreamArtifacts={};for(const entry of allArtifacts){try{readArtifact(workspace,entry.path);(upstreamArtifacts[entry.id]??=[]).push(entry.path);}catch{}}
@@ -94,12 +86,19 @@ export function restoreUnits(workspace,records){
 }
 
 /** Complete lifecycle conductor. Flow's persisted cursor remains the authority. */
-export async function runAidlc({request,executor,commandRunner,authority,controllerRoot,signal,executionSlice,operationProvider,knowledge}){
+export async function runAidlc(options){
+ return withControllerLock(options.controllerRoot,()=>runAidlcUnlocked(options),{inheritedOwner:options.controllerExecutionOwner});
+}
+
+async function runAidlcUnlocked({request,executor,commandRunner,authority,controllerRoot,signal,executionSlice,operationProvider,knowledge}){
   const workspace=fs.realpathSync(request.workspace);controllerRoot=path.resolve(controllerRoot);
   fs.mkdirSync(controllerRoot,{recursive:true,mode:0o700});controllerRoot=fs.realpathSync(controllerRoot);
   if(inside(workspace,controllerRoot)||inside(controllerRoot,workspace))throw new Error('Controller state must be separate from model workspace');
   if(!safeId(request.run_id)||typeof request.prompt!=='string'||!request.prompt.trim())throw new Error('Bound run id and task prompt required');
-  const {snapshot,profile,composition}=resolveComposition(readSnapshot(),request.parameters??{}),defaults=snapshot.profiles[profile]?.defaults;
+  let {snapshot,profile,composition}=resolveComposition(readSnapshot(),request.parameters??{});
+  const originalProfileStages=[...snapshot.profiles[profile].stages];
+  if(executionSlice?.parentAdmission)snapshot=await childExecutionSnapshot({request,executionSlice});
+  const defaults=snapshot.profiles[profile]?.defaults;
   if(!defaults)throw new Error('Unknown profile');
   const settings=resolveCeremony(defaults,request.parameters?.ceremony??{});
   const projectType=request.parameters?.project_type??'brownfield';const omitted=new Set();
@@ -108,16 +107,17 @@ export async function runAidlc({request,executor,commandRunner,authority,control
     if(!Array.isArray(executionSlice.stageIds)||!executionSlice.stageIds.length||executionSlice.stageIds.some(id=>!snapshot.profiles[profile].stages.includes(id)))throw new Error('Invalid host execution slice');
     for(const id of snapshot.profiles[profile].stages)if(!executionSlice.stageIds.includes(id))omitted.add(id);
   }
-  for(const decision of request.parameters?.stage_decisions??[]){if(!snapshot.profiles[profile].stages.includes(decision.stage)||decision.execute!==false||!decision.reason)throw new Error('Invalid scoped stage decision');
+  for(const decision of request.parameters?.stage_decisions??[]){if(!originalProfileStages.includes(decision.stage)||decision.execute!==false||!decision.reason)throw new Error('Invalid scoped stage decision');
+    if(executionSlice?.parentAdmission&&!snapshot.profiles[profile].stages.includes(decision.stage))continue;
     const input={purpose:'stage-selection',stage:decision.stage,decision,request_digest:requestBindingDigest(request)};const grant=await authority?.authorize?.(input);
     if(!grant?.authorized||!grant.reference||authority.verify?.(grant.receipt,input)!==true)throw new Error('Stage selection needs verified host authority');omitted.add(decision.stage);}
-  const {flow,stageIds,selectedSnapshot}=boundDefinition(snapshot,profile,request.run_id,projectType,omitted,settings);
+  let {flow,stageIds,selectedSnapshot}=boundDefinition(snapshot,profile,request.run_id,projectType,omitted,settings);
   if(composition&&!executionSlice&&['workspace-scaffold','workspace-detection','state-init'].some(id=>!stageIds.includes(id)))throw new Error('Composition cannot skip initialization');
   if(composition?.strict_inputs&&!executionSlice)for(const [index,id]of stageIds.entries()){
     const stage=selectedSnapshot.stages.find(stage=>stage.slug===id);
     for(const input of stage.consumes??[])if(input.required&&(!input.conditional_on||input.conditional_on===projectType)&&!selectedSnapshot.stages.some(producer=>stageIds.slice(0,index).includes(producer.slug)&&[...(producer.produces??[]),...(producer.optional_produces??[])].includes(input.artifact)))throw new Error(`Required producer off path: ${id}/${input.artifact}`);
   }
-  const checkpointPolicy=constructionCheckpointPolicy(snapshot,stageIds,request.parameters??{});
+  let checkpointPolicy=constructionCheckpointPolicy(snapshot,stageIds,request.parameters??{});
   const bindingFile=path.join(controllerRoot,'binding.json');const binding={request_digest:requestBindingDigest(request),definition_digest:digest(flow),profile,project_type:projectType,upstream_commit:snapshot.upstream.commit,testing_policy_digest:testing.policy_digest,testing_contract_digest:testing.contract_digest};
   if(composition&&!executionSlice){
     const approvalFile=path.join(controllerRoot,'composition-approval.json');
@@ -128,6 +128,12 @@ export async function runAidlc({request,executor,commandRunner,authority,control
   }
   if(fs.existsSync(bindingFile)){if(JSON.stringify(json(bindingFile))!==JSON.stringify(binding))throw new Error('Resume input or definition changed');}
   else{write(bindingFile,binding);const definitionFile=path.join(controllerRoot,'definition.json');write(definitionFile,flow);await startRun(definitionFile,{cwd:controllerRoot,runId:request.run_id,params:{subject:request.run_id}});}
+  if(!executionSlice){
+    const effective=await verifyRecompositionLedger({request,controllerRoot,authority});
+    const pending=pendingRecomposition({request,controllerRoot,authority,run:effective.run});
+    if(pending)return {schema_version:'1.0',run_id:request.run_id,profile,ceremony:settings,definition_digest:effective.definition_digest,status:'waiting',failure:{reason:'awaiting_decision',stage:'live-recomposition',pending},records:fs.existsSync(path.join(controllerRoot,'stage-records.json'))?json(path.join(controllerRoot,'stage-records.json')):[],executions:[],canonical_state:effective.run.state,semantic_quality:'not_verified'};
+    if(effective.run.state.definition_amendments?.length){flow=effective.run.definition;stageIds=effective.stages;binding.definition_digest=effective.definition_digest;selectedSnapshot=structuredClone(selectedSnapshot);selectedSnapshot.profiles[profile].stages=stageIds;checkpointPolicy=constructionCheckpointPolicy(snapshot,stageIds,request.parameters??{});}
+  }
   fs.mkdirSync(path.join(workspace,'.aidlc'),{recursive:true});fs.writeFileSync(path.join(workspace,'.aidlc/project-description.json'),JSON.stringify(request.prompt)+'\n');
   const recordsFile=path.join(controllerRoot,'stage-records.json');let records=fs.existsSync(recordsFile)?json(recordsFile):[];
   const executions=[];let failure=null,units=null;
@@ -140,9 +146,12 @@ export async function runAidlc({request,executor,commandRunner,authority,control
   };
   const stageLimit=request.parameters?.max_gate_visits??128;let visits=0;
   while(!signal?.aborted&&visits++<stageLimit){
+    const admitted=await loadRun(request.run_id,controllerRoot);
+    if(!['active','completed'].includes(admitted.state.status)){failure={reason:admitted.state.status==='paused'?'authority_required':'canonical_run_inactive',stage:admitted.state.current_step,status:admitted.state.status};break;}
     await refreshArtifactValidity({controllerRoot,runId:request.run_id,workspace,records});write(recordsFile,records);
     units=executionSlice?.units??restoreUnits(workspace,records);
     const run=await loadRun(request.run_id,controllerRoot);if(run.state.status==='completed'){failure=null;break;}
+    if(run.state.status!=='active'){failure={reason:run.state.status==='paused'?'authority_required':'canonical_run_inactive',stage:run.state.current_step,status:run.state.status};break;}
     const stageId=run.state.current_step;if(!stageIds.includes(stageId)){failure={reason:'invalid_cursor',stage:stageId};break;}
     const retained=records.find(record=>record.stage===stageId&&!record.invalidated&&['pass','disabled'].includes(record.sensors?.status));
     if(retained){await evaluateRun(request.run_id,{cwd:controllerRoot});continue;}
@@ -154,7 +163,7 @@ export async function runAidlc({request,executor,commandRunner,authority,control
         runSlice:async({request:childRequest,authority:childAuthority,unit,children})=>{
           const childRoot=path.join(controllerRoot,'construction',childRequest.run_id);
           const beforeSource=snapshotWorkspace(workspace);
-          const result=await runAidlc({request:childRequest,executor,commandRunner,authority:childAuthority,controllerRoot:childRoot,signal,operationProvider,knowledge,executionSlice:{stageIds:block,units:[unit],observationSnapshot:selectedSnapshot,initialArtifacts,checkpointPolicy}});
+          const result=await runAidlc({request:childRequest,executor,commandRunner,authority:childAuthority,controllerRoot:childRoot,signal,operationProvider,knowledge,executionSlice:{stageIds:block,units:[unit],observationSnapshot:selectedSnapshot,initialArtifacts,checkpointPolicy,parentAdmission:{request:structuredClone(request),controllerRoot,definition:{id:flow.id,version:flow.version,digest:definitionDigest(flow)}}}});
           const afterSource=snapshotWorkspace(workspace),prior=new Map(beforeSource.files.map(file=>[file.path,file])),next=new Map(afterSource.files.map(file=>[file.path,file]));
           const sourceRefs=[...new Set([...prior.keys(),...next.keys()])].filter(file=>prior.get(file)?.digest!==next.get(file)?.digest).map(file=>({path:file,before_digest:prior.get(file)?.digest??null,digest:next.get(file)?.digest??null}));
           return {...result,controller_root:childRoot,construction_source_refs:sourceRefs};

@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 export const KIT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 export const digest = (value) => createHash('sha256').update(typeof value === 'string' || Buffer.isBuffer(value) ? value : JSON.stringify(value)).digest('hex');
 // Resume binds experiment inputs, not rotating worker access capabilities.
-export function requestBindingDigest(request) {
+export function requestBindingValue(request) {
   const bound=structuredClone(request);
   if(bound.engine_sandbox)delete bound.engine_sandbox.owner_id;
   if(bound.engine_sandbox?.providerProxy){
@@ -15,8 +15,9 @@ export function requestBindingDigest(request) {
     delete bound.engine_sandbox.providerProxy.url;
     delete bound.engine_sandbox.providerProxy.baseUrl;
   }
-  return digest(bound);
+  return bound;
 }
+export const requestBindingDigest=request=>digest(requestBindingValue(request));
 const SNAPSHOT_SHA256 = '8fefabf02fbf7685bec9ab1e491d709946c792a7926a14da35618c54ad9f2d46';
 export const readSnapshot = () => {
   const bytes = readFileSync(join(KIT_ROOT, 'upstream/snapshot.json'));

@@ -10,6 +10,7 @@ import {createCommandOperationProvider,createOperationCommandRunner} from './ope
 import {createLearningCapture} from './learnings.mjs';
 import { runAidlc } from './runtime.mjs';
 import { KIT_ROOT, requestBindingDigest } from './compile.mjs';
+import {retainRequestAdmission} from './request-admission.mjs';
 
 export {runAidlc};
 
@@ -27,7 +28,7 @@ function privateController(workspace,controllerRoot){
   fs.chmodSync(resolved,0o700);return resolved;
 }
 
-export async function executeKit({request,controllerRoot,workerRunner,signal,operationProvider,knowledge}){
+export async function executeKit({request,controllerRoot,workerRunner,signal,operationProvider,knowledge,controllerExecutionOwner}){
   if(request.schema!=='kontour.kit.execution_request'||request.version!=='1.0')throw new Error('Unsupported kit execution request');
   if(request.kit_id!=='aidlc')throw new Error('This entry executes the aidlc kit');
   controllerRoot=privateController(request.workspace,controllerRoot);
@@ -38,7 +39,7 @@ export async function executeKit({request,controllerRoot,workerRunner,signal,ope
   operationProvider??=request.parameters?.operations?createCommandOperationProvider({config:request.parameters.operations,commandRunner:createOperationCommandRunner({workspace:request.workspace,controllerRoot}),controllerRoot}):undefined;
   knowledge??=createLearningCapture({controllerRoot});
   let result;
-  try{result=await runAidlc({request,executor,commandRunner,authority,controllerRoot,signal,operationProvider,knowledge});}
+  try{result=await runAidlc({request,executor,commandRunner,authority,controllerRoot,signal,operationProvider,knowledge,controllerExecutionOwner});}
   catch(error){result={status:'failed',failure:{reason:error.message},records:[],executions:[]};}
   fs.writeFileSync(path.join(controllerRoot,'runtime-result.json'),JSON.stringify(result,null,2)+'\n');
   const workers=executor.observed;
@@ -56,6 +57,7 @@ export async function executeKit({request,controllerRoot,workerRunner,signal,ope
 
 export async function executeRequestFile({requestFile,controllerRoot,authFile,workerRunner,brokerFactory,executionOwner=randomUUID(),signal}){
   const request=JSON.parse(fs.readFileSync(requestFile,'utf8'));
+  const originalDigest=requestBindingDigest(request);
   if(request.schema!=='kontour.kit.execution_request'||request.version!=='1.0'||request.kit_id!=='aidlc')throw new Error('Unsupported kit execution request');
   request.workspace=fs.realpathSync(request.workspace);
   request.source_root=fs.realpathSync(request.source_root??KIT_ROOT);
@@ -90,7 +92,8 @@ export async function executeRequestFile({requestFile,controllerRoot,authFile,wo
       broker=await brokerFactory({authFile,model:request.execution.model,reasoningEffort:request.execution.reasoning_effort,maxRequests:request.execution.max_provider_requests,...(brokerConfig.bind_host!==undefined?{bindHost:brokerConfig.bind_host}:{}),...(brokerConfig.port!==undefined?{port:brokerConfig.port}:{}),ledgerFile:path.join(controllerRoot,'provider-budget.json'),requestBindingDigest:requestDigest,initializeLedger});
       config.providerProxy={baseUrl:broker.baseUrl,capability:broker.capability,model:broker.model};
     }
-    return await executeKit({request,controllerRoot,workerRunner,signal});
+    retainRequestAdmission({request,originalDigest,controllerRoot});
+    return await executeKit({request,controllerRoot,workerRunner,signal,controllerExecutionOwner:executionOwner});
   }finally{
     try{if(broker){
       try{fs.writeFileSync(path.join(controllerRoot,`provider-observations-${executionOwner}.json`),JSON.stringify(broker.evidence,null,2)+'\n',{flag:'wx',mode:0o600});}
