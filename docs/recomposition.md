@@ -61,7 +61,7 @@ The CLI records a host-observed operator interaction using the private controlle
 signing key. It does not prove a personally authenticated human signature.
 Source/deployment permissions and review dispositions remain separate decisions.
 
-This path consumes published Flow 5.2.0, Flow Agents 7.0.1, and the public `pending_forward`
+This path consumes published Flow 5.2.0, Flow Agents 7.0.2, and the public `pending_forward`
 compatibility mode. Package tests exercise clean installation and ordinary CLI
 proposal, decision, amendment and resume against that public package. Adapter
 fixtures remain separate from live model execution and comparative quality.
