@@ -225,3 +225,29 @@ test('source changed during trusted host decision invalidates acceptance before 
   const result=await run(port,{stage:stage({reviewer:'reviewer',review_class:'advisory'})});
   assert.equal(result.reason,'stale_decision');assert.equal(result.status,'blocked');assert.equal(releasedStatus,'blocked');assert.equal(result.units[0].authority_reference,undefined);
 });
+
+test('host-verified DAG continuation preserves receipts, admits newly unblocked units and retains total execution budget',async t=>{
+ const port=processPort(t),contract=stage({reviewer:'reviewer',review_class:'advisory',reviewer_max_iterations:1}),units=[{id:'core',mutable_resources:['core']},{id:'ui',depends_on:['core'],mutable_resources:['ui']}],policy={maxExecutions:4};
+ let result=await dispatchStage({stage:contract,units,executor:port,policy});assert.equal(result.status,'awaiting_decision');assert.equal(result.executions,2);assert.equal(result.units[1].reason,'dependency_blocked');const first=structuredClone(result);
+ const unseen=await dispatchStage({stage:contract,units,executor:port,policy,resume:first});assert.equal(unseen.reason,'unverified_resume');assert.equal(port.events.length,4);
+ const accepted={...port,verifyResume:observed=>digest(observed)===digest(first),decide:async input=>({authorized:input.unit==='core',decision:'accept',reference:'actual-test-operator-core'})};
+ result=await dispatchStage({stage:contract,units,executor:accepted,policy,resume:first});assert.equal(result.status,'awaiting_decision');assert.equal(result.executions,4);assert.deepEqual(result.units[0].receipts,first.units[0].receipts);assert.equal(result.units[1].receipts.length,2);const second=structuredClone(result),events=port.events.length;
+ const denied=await dispatchStage({stage:contract,units,executor:{...port,verifyResume:observed=>digest(observed)===digest(second),decide:async()=>({authorized:false})},policy,resume:second});assert.equal(denied.status,'awaiting_decision');assert.equal(denied.executions,4);assert.equal(port.events.length,events);
+ const complete=await dispatchStage({stage:contract,units,executor:{...port,verifyResume:observed=>digest(observed)===digest(second),decide:async()=>({authorized:true,decision:'accept',reference:'actual-test-operator-ui'})},policy,resume:second});assert.equal(complete.status,'completed');assert.equal(complete.executions,4);assert.equal(port.events.length,events);
+ const limitedPort=processPort(t),limitedPolicy={maxExecutions:2},limited=await dispatchStage({stage:contract,units,executor:limitedPort,policy:limitedPolicy});assert.equal(limited.executions,2);
+ const exhausted=await dispatchStage({stage:contract,units,executor:{...limitedPort,verifyResume:observed=>digest(observed)===digest(limited),decide:async()=>({authorized:true,decision:'accept',reference:'actual-test-operator-core'})},policy:limitedPolicy,resume:limited});assert.equal(exhausted.status,'blocked');assert.equal(exhausted.reason,'execution_budget');assert.equal(exhausted.executions,2);assert.equal(limitedPort.events.length,4);
+ port.source.set('core','external source change');const stale=await dispatchStage({stage:contract,units,executor:accepted,policy,resume:first});assert.equal(stale.reason,'stale_resume');assert.equal(port.events.length,events);
+});
+
+test('mob judgment continuations retain producers and run dialogue integration and declared hard review after each exact decision',async t=>{
+ for(const mode of ['first-judgment','dialogue-judgment','both-judgments']){
+  const port=processPort(t,{adjust(request,result,port){if(request.phase==='integrate'&&request.iteration===1)port.source.set(request.unit,`observed final integration ${mode}`);if(request.phase==='contribute')result.objections=mode==='first-judgment'?[{kind:'judgment',reason:'Operator must decide scope'}]:[{kind:'knowledge',reason:'Need dialogue'},...(mode==='both-judgments'?[{kind:'judgment',reason:'Operator must decide scope'}]:[])];if(request.phase==='dialogue')result.objections=[{kind:'judgment',reason:'Operator must decide scope'}];}}),contract=stage({mode:'mob',support_agents:['architecture'],reviewer:'reviewer',review_class:'adversarial'});
+  let result=await dispatchStage({stage:contract,executor:port});assert.equal(result.status,'awaiting_decision');assert.equal(result.units[0].reviews.length,0);const contributions=port.events.filter(event=>event.kind==='start'&&event.phase==='contribute').length;
+  for(let decisions=0;decisions<2&&result.status!=='completed';decisions++){
+   const prior=structuredClone(result),record=prior.units[0],executor={...port,verifyResume:observed=>digest(observed)===digest(prior),decide:async decision=>({authorized:decision.continuation_phase===record.continuation.phase&&digest(decision.execution_receipts)===digest(record.receipts.map(receipt=>receipt.receipt)),decision:'accept',reference:`actual-test-operator-${mode}-${decisions}`})};
+   result=await dispatchStage({stage:contract,executor,resume:prior});
+  }
+  assert.equal(result.status,'completed',JSON.stringify(result));assert.equal(result.units[0].reviews.length,1);assert.equal(port.events.filter(event=>event.kind==='start'&&event.phase==='review').length,1);assert.equal(port.events.filter(event=>event.kind==='start'&&event.phase==='contribute').length,contributions);assert.equal(port.events.filter(event=>event.kind==='start'&&event.phase==='draft').length,1);
+  assert.equal(port.events.filter(event=>event.kind==='start'&&event.phase==='integrate').length,mode==='first-judgment'?1:2);assert.equal(port.events.filter(event=>event.kind==='start'&&event.phase==='dialogue').length,mode==='first-judgment'?0:1);
+ }
+});

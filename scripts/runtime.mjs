@@ -306,12 +306,18 @@ async function runAidlcUnlocked({request,executor,commandRunner,authority,contro
           if(!retainedReview)saveRetainedDispatch({controllerRoot,kind:'review',stage:stageId,binding:reviewBinding(),admission:checkpointRetryIdentity(run),basis:reviewBasis(),dispatch:dispatched,context});
           const input={purpose:'review-disposition',stage:stageId,decision:dispatched,request_digest:binding.request_digest};const grant=await authority?.authorize?.(input);
           if(grant?.authorized&&authority.verify?.(grant.receipt,input)===true){
-            if(unitFlow)for(const record of dispatched.units){
-              if(record.status!=='awaiting_decision')continue;
-              record.status='completed';record.reason=null;record.authority_reference=grant.reference;
-              const lease=await unitFlow.claim({unit:record.id,signal});await unitFlow.release(lease,record);
+            const prior=structuredClone(dispatched),approved=new Map(prior.units.filter(record=>record.status==='awaiting_decision').map(record=>[record.id,record]));
+            const resumedExecutor={...stageExecutor,verifyResume:observed=>digest(observed)===digest(prior),async decide(decision){
+              const record=approved.get(decision.unit);
+              if(!record||decision.continuation_phase!==(record.continuation?.phase??null)||digest(decision.execution_receipts)!==digest(record.receipts.map(observed=>observed.receipt))||digest(decision.basis)!==digest(record.basis)||digest(decision.review_receipts)!==digest(record.reviews.map(review=>review.receipt))||digest(decision.findings)!==digest(record.findings)||digest(decision.dissent)!==digest(record.dissent))return {authorized:false,reason:'new_unit_requires_current_disposition'};
+              return {authorized:true,decision:'accept',reference:grant.reference};
+            }};
+            dispatched=await dispatchStage({stage,units:stage.for_each?units:undefined,executor:resumedExecutor,context,policy:{...request.parameters?.dispatch_policy,...(unitFlow?{requiresClaim:true}:{})},signal,resume:prior});
+            if(!inputReplayed)executions.push(...prior.units.flatMap(record=>record.receipts));const priorReceipts=new Set(prior.units.flatMap(record=>record.receipts.map(receipt=>receipt.receipt.id)));executions.push(...dispatched.units.flatMap(record=>record.receipts.filter(receipt=>!priorReceipts.has(receipt.receipt.id))));inputReplayed=true;
+            if(dispatched.status==='awaiting_decision'){
+              saveRetainedDispatch({controllerRoot,kind:'review',stage:stageId,binding:reviewBinding(),admission:checkpointRetryIdentity(run),basis:reviewBasis(),dispatch:dispatched,context});
+              const nextInput={purpose:'review-disposition',stage:stageId,decision:dispatched,request_digest:binding.request_digest},next=await authority?.authorize?.(nextInput);dispatched.pending=next?.pending??null;
             }
-            dispatched.status='completed';
           }else dispatched.pending=dispatched.units.flatMap(unit=>unit.decisions??[]).findLast(decision=>decision.response?.pending)?.response.pending??grant?.pending??null;
         }
         if(dispatched.status==='completed'&&unitFlow){
@@ -323,7 +329,7 @@ async function runAidlcUnlocked({request,executor,commandRunner,authority,contro
           }else if(!historicalJoin.complete)dispatched={...dispatched,status:'blocked',reason:'canonical_unit_join_incomplete'};
         }
       }catch(error){failure={stage:stageId,reason:error.code==='execution_budget'||error.code==='storage_budget'?'budget_exhausted':'execution_failed',detail:{message:error.message,code:error.code??null}};await refuse(stageId,failure);break;}finally{await unitFlow?.close();}
-      if(!inputReplayed)executions.push(...dispatched.units.flatMap(u=>u.receipts??[]),...(dispatched.final_verification?.dispatch?.units??[]).flatMap(u=>u.receipts??[]));
+      if(!inputReplayed)executions.push(...dispatched.units.flatMap(u=>u.receipts??[]));executions.push(...(dispatched.final_verification?.dispatch?.units??[]).flatMap(u=>u.receipts??[]));
       if(dispatched.status!=='completed'){failure={stage:stageId,reason:dispatched.reason==='execution_budget'||dispatched.reason==='storage_budget'?'budget_exhausted':dispatched.reason??dispatched.status,detail:dispatched};await refuse(stageId,failure);break;}
       if(context.shared.approved_summary_basis?.some(ref=>readArtifact(workspace,ref.path).digest!==ref.digest)){failure={stage:stageId,reason:'approved_summary_changed'};await refuse(stageId,failure);break;}
       assertTestingPolicyCurrent(testing,testingInput);
