@@ -237,6 +237,9 @@ async function runAidlcUnlocked({request,executor,commandRunner,authority,contro
       if(questions.length){
         const checkpoint={...stage,workspace_requires:false,reviewer:undefined,produces:questions.map(a=>a.id),optional_produces:[]};
         const checkpointContext=structuredClone(context);checkpointContext.shared.planning_only=true;checkpointContext.shared.summary_only=true;checkpointContext.shared.artifact_targets=questions;
+        // The learning ritual belongs to substantive stage completion, not a
+        // question-only checkpoint whose output scope excludes the diary.
+        for(const entry of [checkpointContext.shared,...Object.values(checkpointContext.units)])for(const key of ['learning_diary','learning_diaries','learning_protocol'])delete entry[key];
         for(const entry of Object.values(checkpointContext.units))entry.artifact_targets=entry.artifact_targets.filter(a=>a.id.endsWith('-questions'));
         const questionnairePurpose=stageId==='intent-capture'&&settings.summary_confirmation==='off'?'input-confirmation':'summary-confirmation';
         const summaryBinding={request_digest:binding.request_digest,checkpoint,context:checkpointContextBinding(checkpointContext),source_digest:snapshotWorkspace(workspace).source_digest},admission=checkpointRetryIdentity(run);
