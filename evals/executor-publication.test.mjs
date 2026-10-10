@@ -205,3 +205,18 @@ test('source path reports cannot bypass unit source jail or read-only input cust
 });
 
 test('an unchanged approved input may be reported but unreported changes cannot escape approval custody',async t=>{const unchanged=await reportedPathsFixture(t,{approvedInput:true});assert.equal((await unchanged.execute()).status,'completed');const modified=await reportedPathsFixture(t,{approvedInput:true,mutateInput:true,report:['app.mjs','.aidlc/artifacts/code-generation/code-summary.md']});await assert.rejects(modified.execute(),/changed approved plan/);assert.equal(fs.readFileSync(path.join(modified.workspace,'app.mjs'),'utf8'),'export const value=1;');});
+
+test('canonical artifact ancestor symlinks refuse all publication before valid source edits or deletes',async t=>{
+ const f=fixture(t,{responseStatus:'completed'}),artifactRoot=path.join(f.workspace,'.aidlc/artifacts'),foreign=path.join(path.dirname(f.workspace),'foreign');fs.mkdirSync(foreign);fs.rmSync(artifactRoot,{recursive:true});fs.symlinkSync(foreign,artifactRoot,'dir');
+ await assert.rejects(f.execute(),/Publication destination ancestor is not a real directory/);
+ assert.equal(fs.readFileSync(path.join(f.workspace,'app.js'),'utf8'),'canonical implementation');assert.equal(fs.readFileSync(path.join(f.workspace,'keep.js'),'utf8'),'canonical retained file');assert.equal(fs.existsSync(path.join(f.workspace,'added.js')),false);assert.deepEqual(fs.readdirSync(foreign),[]);
+});
+test('canonical artifact leaf symlinks cannot overwrite an external file or publish otherwise valid source',async t=>{
+ const f=fixture(t,{responseStatus:'completed'}),foreign=path.join(path.dirname(f.workspace),'foreign.txt');fs.writeFileSync(foreign,'outside protected');fs.unlinkSync(path.join(f.workspace,f.artifact));fs.symlinkSync(foreign,path.join(f.workspace,f.artifact));
+ await assert.rejects(f.execute(),/Publication destination is not a regular file/);assert.equal(fs.readFileSync(foreign,'utf8'),'outside protected');assert.equal(fs.readFileSync(path.join(f.workspace,'app.js'),'utf8'),'canonical implementation');assert.equal(fs.existsSync(path.join(f.workspace,'added.js')),false);
+});
+test('explicit missing upstream artifact refuses worker admission before any source can be invented',async t=>{
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'aidlc-missing-input-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));const workspace=path.join(root,'source'),controllerRoot=path.join(root,'controller');fs.mkdirSync(workspace);fs.mkdirSync(controllerRoot);fs.writeFileSync(path.join(workspace,'app.js'),'original source');let starts=0;
+ const request={workspace,source_root:workspace,run_id:'missing-input',execution:{max_turns:2,timeout_s:30,model:'host-port'},engine_sandbox:{image:`sha256:${'a'.repeat(64)}`,artifact_root:path.join(root,'capture')}};
+ const executor=createDockerExecutor({request,controllerRoot,workerRunner:async()=>{starts++;throw new Error('Must never start');}}),dispatch={request_digest:digest('missing-input'),stage:'code-generation',unit:'stage',phase:'inline',role:'lead',basis:await executor.snapshotBasis({}),context:{stage:{workspace_requires:true},artifact_targets:[],upstream_artifacts:[{path:'.aidlc/artifacts/requirements.md',digest:'a'.repeat(64)}]}};dispatch.expected_identity=await executor.admit(dispatch);await assert.rejects(executor.execute(dispatch),/ENOENT/);assert.equal(starts,0);assert.equal(fs.readFileSync(path.join(workspace,'app.js'),'utf8'),'original source');
+});

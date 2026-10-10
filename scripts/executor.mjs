@@ -6,6 +6,7 @@ import { readArtifact } from './artifacts.mjs';
 import { snapshotWorkspace } from './runtime.mjs';
 import { buildExecutionPrompt, observeOutputs } from './authority.mjs';
 import {stampTestingPlan} from './testing-posture.mjs';
+import {createPublicationJail} from './publication.mjs';
 
 const json=file=>JSON.parse(fs.readFileSync(file,'utf8'));
 const put=(file,value)=>{fs.mkdirSync(path.dirname(file),{recursive:true,mode:0o700});fs.writeFileSync(file,JSON.stringify(value,null,2)+'\n',{flag:'wx',mode:0o600});};
@@ -17,6 +18,7 @@ const inside=(root,file)=>{const rel=path.relative(root,file);return rel!=='..'&
 /** Host-owned executor. Model messages never become identity or evidence receipts. */
 export function createDockerExecutor({request,controllerRoot,workerRunner,signal}){
   const workspace=fs.realpathSync(request.workspace),config=request.engine_sandbox;
+  const publicationJail=createPublicationJail(workspace);
   if(!config||typeof workerRunner!=='function')throw new Error('Pinned worker sandbox port required');
   for(const excluded of config.forbidden_mount_roots??[]){const root=fs.realpathSync(excluded.path);for(const source of [workspace,fs.realpathSync(request.source_root)])if(inside(source,root)||inside(root,source))throw new Error('Private host source may not be copied into model workers');}
   if(!Number.isSafeInteger(request.execution?.max_turns)||request.execution.max_turns<1||request.execution.max_turns>10000||!Number.isFinite(request.execution.timeout_s)||request.execution.timeout_s<=0||request.execution.timeout_s>86400)throw new Error('Finite execution turn and time budgets required');
@@ -68,7 +70,7 @@ export function createDockerExecutor({request,controllerRoot,workerRunner,signal
       const approvedInputs=new Map([...(dispatch.context.approved_plan_basis??[]),...(dispatch.context.approved_summary_basis??[])].map(ref=>[ref.path,ref.digest]));
       const priorArtifacts=[...(dispatch.context.upstream_artifacts??[]),...(dispatch.context.approved_plan_basis??[]),...(dispatch.context.approved_summary_basis??[]),...(dispatch.reviewed_artifacts??[]),...(dispatch.revised_artifacts??[]),...(dispatch.upstream??[]).flatMap(value=>value.artifacts??[]),...(dispatch.draft?.artifacts??[]),...(dispatch.contributions??dispatch.positions??[]).flatMap(value=>value.artifacts??[])];
       const inputArtifacts=new Map();
-      for(const ref of priorArtifacts){if(!safeRel(ref.path))throw new Error('Invalid artifact input path');try{const observed=readArtifact(workspace,ref.path);if(ref.digest!==undefined&&ref.digest!==observed.digest)throw new Error('Artifact input basis changed before worker copy');inputArtifacts.set(ref.path,observed.digest);const dest=path.join(fork,ref.path);fs.mkdirSync(path.dirname(dest),{recursive:true});fs.copyFileSync(path.join(workspace,ref.path),dest);}catch(error){if(error.code!=='ENOENT'||approvedInputs.has(ref.path))throw error;}}
+      for(const ref of priorArtifacts){if(!safeRel(ref.path))throw new Error('Invalid artifact input path');try{const observed=readArtifact(workspace,ref.path);if(ref.digest!==undefined&&ref.digest!==observed.digest)throw new Error('Artifact input basis changed before worker copy');inputArtifacts.set(ref.path,observed.digest);const dest=path.join(fork,ref.path);fs.mkdirSync(path.dirname(dest),{recursive:true});fs.copyFileSync(path.join(workspace,ref.path),dest);}catch(error){if(error.code!=='ENOENT'||ref.digest!==undefined||approvedInputs.has(ref.path)||ref.optional!==true)throw error;}}
       const assertInputsCurrent=(root)=>{for(const [file,expected] of inputArtifacts){if(dispatch.phase!=='review'&&ownTargets.some(target=>target.path===file)&&!approvedInputs.has(file))continue;let actual;try{actual=readArtifact(root,file).digest;}catch{throw new Error('Worker removed or made an assigned input unreadable');}if(actual!==expected)throw new Error(approvedInputs.has(file)?'Worker changed approved plan/test instructions':'Worker changed an assigned read-only input');}};
       for(const diary of dispatch.context.learning_diaries??[]){const source=path.join(workspace,diary.path);if(fs.existsSync(source)){fs.mkdirSync(path.dirname(path.join(fork,diary.path)),{recursive:true});fs.copyFileSync(source,path.join(fork,diary.path));}}
       for(const local of ['.aidlc/state.md','.aidlc/project-description.json']){const source=path.join(workspace,local);if(fs.existsSync(source)){fs.mkdirSync(path.dirname(path.join(fork,local)),{recursive:true});fs.copyFileSync(source,path.join(fork,local));}}
@@ -131,6 +133,10 @@ export function createDockerExecutor({request,controllerRoot,workerRunner,signal
       const apply=async()=>{
         await dispatch.beforePublication?.();
         assertInputsCurrent(workspace);
+        const publication=publicationJail.preflight([...new Set([...changed,...returned.map(ref=>ref.path)])]);
+        const payloads=new Map();
+        createPublicationJail(fork).preflight([...new Set([...changed.filter(file=>next.has(file)),...returned.map(ref=>ref.path)])]);
+        for(const [file,expected]of [...changed.filter(file=>next.has(file)).map(file=>[file,next.get(file).digest]),...returned.map(ref=>[ref.path,ref.digest])]){const source=path.join(fork,file),stat=fs.lstatSync(source);if(stat.isSymbolicLink()||!stat.isFile())throw new Error('Publication input is not a regular file');const bytes=fs.readFileSync(source);if(digest(bytes)!==expected)throw new Error('Publication input bytes changed after observation');payloads.set(file,{bytes,mode:stat.mode&0o777});}
         // Host-side shared storage ledger, enforced before any canonical byte
         // is written. Fail-closed: a later merge conflict still counts the
         // attempted writes against the budget.
@@ -147,8 +153,8 @@ export function createDockerExecutor({request,controllerRoot,workerRunner,signal
         }
         for(const file of changed){let actual;try{actual=readArtifact(workspace,file).digest;}catch(error){if(error.code!=='ENOENT')throw error;}
           if(actual!==prior.get(file)?.digest)throw new Error(`Concurrent source merge conflict: ${file}`);}
-        for(const file of changed){const target=path.join(workspace,file);if(!next.has(file)){fs.unlinkSync(target);continue;}fs.mkdirSync(path.dirname(target),{recursive:true});fs.copyFileSync(path.join(fork,file),target);}
-        for(const ref of returned){const target=path.join(workspace,ref.path);fs.mkdirSync(path.dirname(target),{recursive:true});fs.copyFileSync(path.join(fork,ref.path),target);}
+        for(const file of changed){if(!next.has(file)){publication.remove(file);continue;}const payload=payloads.get(file);publication.write(file,payload.bytes,payload.mode);}
+        for(const ref of returned){const payload=payloads.get(ref.path);publication.write(ref.path,payload.bytes,payload.mode);}
       };
       const applied=merge.then(apply);merge=applied.catch(()=>{});await applied;
       return {status:response.status,identity,identity_basis:'executor-observed',receipt,input_basis:dispatch.basis,artifacts:returned.map(ref=>({path:ref.path,digest:ref.digest})),observation,changed_source:changed,...(contribution?{objections:response.objections??[],role:dispatch.role}:{})};
