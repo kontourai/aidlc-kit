@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {withControllerLock} from './controller-lock.mjs';
 import {recomposeRun} from './recomposition.mjs';
-import {recordControllerDecision} from './authority.mjs';
+import {recordControllerInteraction} from './authority.mjs';
 import {readSnapshot,generatedFiles} from './compile.mjs';
 const [command,...args]=process.argv.slice(2);
 const get=name=>{const at=args.indexOf(name);return at<0?null:args[at+1];};
@@ -27,7 +27,7 @@ if(command==='run'){
  const controllerRoot=get('--controller-root'),pendingFile=get('--pending'),reference=get('--reference');
  if(!controllerRoot||!pendingFile||!reference)throw new Error('Usage: aidlc decide --controller-root <private-root> --pending <signed-pending.json> --reference <operator-reference> [--decision approve|deny] [--disposition <explicit-disposition.json>]');
  const dispositionFile=get('--disposition'),disposition=dispositionFile?JSON.parse(fs.readFileSync(dispositionFile,'utf8')):undefined;
- console.log(JSON.stringify(await withControllerLock(controllerRoot,()=>recordControllerDecision({controllerRoot,pendingFile,reference,disposition,decision:get('--decision')??'approve'}))));
+ console.log(JSON.stringify(await withControllerLock(controllerRoot,()=>recordControllerInteraction({controllerRoot,pendingFile,reference,disposition,decision:get('--decision')??'approve'}))));
 }else if(command==='profiles')console.log(JSON.stringify(Object.keys(readSnapshot().profiles)));
 else if(command==='check'){
  const {spawnSync}=await import('node:child_process');

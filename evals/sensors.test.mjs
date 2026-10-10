@@ -401,3 +401,24 @@ test('actual source-write checks union with declared imports without duplicate e
   assert.equal(result.checks.filter(c => c.id === 'type-check').length, 1);
   assert.equal(check(result, 'linter').trigger_origin, 'native-stage-contract');
 });
+
+
+test('pinned None assumption sentinel is allowed only as the entire Assumptions section block',async t=>{
+ const positive=claimFixture(t);positive.put('out/intent-statement.md','## Intent\nBuild a calendar. [desc]\n\n## Assumptions & Open Questions\nNone.');assert.equal(check(await positive.run(),'claim-sources').status,'pass');
+ for(const body of ['## Intent\nNone.\n\n## Assumptions & Open Questions\nNone.','## Intent\nBuild a calendar. [desc]\n\n## Assumptions & Open Questions\nNone. More inferred facts.','## Intent\nBuild a calendar. [desc]\n\n## Assumptions & Open Questions\n- Unconfirmed. [assumption]']){const negative=claimFixture(t);negative.put('out/intent-statement.md',body);assert.equal(check(await negative.run(),'claim-sources').status,'fail');}
+});
+
+
+test('adjacent declared citation tags retain provenance while inline and defined reference links refuse',async t=>{
+ for(const tags of ['[Q1] [Q1]','[Q1][Q1]']){const f=claimFixture(t);f.put('out/stakeholder-map.md',`## Stakeholders\nConfirmed users. ${tags}\n\n## Assumptions & Open Questions\nNone.`);assert.equal(check(await f.run(),'claim-sources').status,'pass');}
+ for(const tags of ['[Q1](https://example.invalid)','[Q1][unknown]','[Q1][Q99]','[Q1][Q1]\n\n[Q1]: https://example.invalid','[Q1][Q1](https://example.invalid)','[Q1][Q1][unknown]']){const f=claimFixture(t);f.put('out/stakeholder-map.md',`## Stakeholders\nConfirmed users. ${tags}\n\n## Assumptions & Open Questions\nNone.`);assert.equal(check(await f.run(),'claim-sources').status,'fail');}
+});
+
+test('literal comparisons and inline code are text while GFM table headers are not claim rows',async t=>{
+ for(const statement of ['Compare ``a < b and `inline``` with another operand. [Q1]', 'Compare a < b and a > b lexicographically. [Q1]','Compare `a < b` and `a > b` lexicographically. [Q1]']){
+  const f=claimFixture(t);f.put('out/stakeholder-map.md',`## Stakeholders\n${statement}\n\n| Stakeholder | Interests | Source |\n| --- | --- | --- |\n| Developers | Local reuse | [Q1] |\n\n## Assumptions & Open Questions\nNone.`);assert.equal(check(await f.run(),'claim-sources').status,'pass');
+ }
+ for(const body of ['| Stakeholder | Source |\n| --- | --- |\n| --- | --- |\n| Actual team | [Q1] |', '| Stakeholder | Source |\n| --- | --- |\n| Unsupported uncited stakeholder | Uncited description |\n| --- | --- |\n| Actual team | [Q1] |', '| Uncited escaped \\| header | Source |\n| --- | --- | --- |\n| Developers | Local reuse | [Q1] |', 'Stakeholder | Interests | Source\n--- | --- | ---\nUnsupported stakeholder | Uncited fact |\nDevelopers | Local reuse | [Q1]', '| Stakeholder | Interests | Source |\n| --- | --- | --- |\n| Developers | Unsupported interest | |','| Stakeholder | Interests | Source |\n| This is ordinary uncited prose | Not a delimiter | |','Actual <span hidden>hidden content [Q1]</span> unsupported claim.','Code tags are not provenance: `literal [Q1]`.','Actual <span hidden>hidden [Q1]</span> unsupported claim with visible [Q1].','Code-boundary removal must not manufacture provenance: [Q`x`1].']){
+  const f=claimFixture(t);f.put('out/stakeholder-map.md',`## Stakeholders\n${body}\n\n## Assumptions & Open Questions\nNone.`);assert.equal(check(await f.run(),'claim-sources').status,'fail',body);
+ }
+});

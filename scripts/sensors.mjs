@@ -20,6 +20,7 @@ const scaffold = (name) => /(?:-questions|-timestamp)$/.test(name) || name === '
 const stem = (path) => basename(path).replace(/\.(md|json)$/i, '');
 const escape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const ids = (text, pattern) => new Set(text.match(pattern) ?? []);
+const withoutInlineCode=text=>text.replace(/(?<!`)(`+)(?!`)[\s\S]*?(?<!`)\1(?!`)/g,span=>' '.repeat(span.length));
 const patterns = {
   FR: /\bFR\d+(?:\.\d+)?\b/g, NFR: /\bNFR\d+\b(?!\.\d)/g,
   detail: /\bNFR\d+\.\d+\b/g, US: /\bUS\d+\.\d+\b/g,
@@ -247,7 +248,13 @@ function claims(stage, outputs, context, read) {
   const findings = [], register = new Set(), answered = new Set();
   // Reject syntax whose rendering this port cannot prove. This deliberately
   // errs toward requesting a visible citation rather than accepting hidden text.
-  const ambiguous = (text) => /<[^>]*>|^\s*\[(?!Answer\])[^\]]+\]:|\[[^\]]+\]\s*(?:\(|\[)|\\\[|&#?\w+;/m.test(text.replace(/<!--[^]*?(?:-->|$)/g, ''));
+  const ambiguous = (text) => {
+    const visible=withoutInlineCode(text.replace(/<!--[^]*?(?:-->|$)/g, ''));
+    if(/<(?:\/?[A-Za-z][A-Za-z0-9-]*\b|https?:\/\/|mailto:|[^<>\s]+@)[^>]*>|^\s*\[(?!Answer\])[^\]]+\]:|\\\[|&#?\w+;/m.test(visible))return true;
+    const source=/^(?:desc|scope|Q\d+|memory:[\w.-]+|assumption)$/;
+    for(const match of visible.matchAll(/\[([^\]]+)\](\s*)(?=(\(|\[([^\]]+)\]))/g))if(match[3]==='('||!source.test(match[1])||!source.test(match[4]))return true;
+    return false;
+  };
   if (ambiguous(q)) findings.push('Questions contain unsupported HTML or reference-link syntax');
   for (const line of section(q, 'Sources')) {
     const match = /^\s*[-*+]\s+\[(desc|scope|memory:[\w.-]+)\]\s+(.+)$/.exec(line);
@@ -284,9 +291,13 @@ function claims(stage, outputs, context, read) {
   const acceptance = assumptionBody.filter((s) => /^\[Answer\]:/.test(s));
   const acceptedAnswer = acceptance.length === 1 && acceptance[0] === '[Answer]: A. Accept assumptions';
   const normalize = (s) => s.replace(/^\s*[-*+]\s+/, '').replace(/\[assumption\]/g, '').replace(/\s+/g, ' ').trim();
-  const blocks = (lines) => {
+  const blocks = (lines,tableClaims=new Set()) => {
     const result = []; let block = '';
-    for (const line of [...lines, '']) {
+    const row=line=>{if(/^(?: {4}|\t)/.test(line))return null;const value=line.trim(),values=[''];let pipes=0;for(let index=0;index<value.length;index++){const char=value[index];if(char==='\\'&&index+1<value.length){values[values.length-1]+=char+value[++index];}else if(char==='|'){pipes++;values.push('');}else values[values.length-1]+=char;}if(!pipes)return null;if(!values[0].trim())values.shift();if(values.length&&!values.at(-1).trim())values.pop();return values.length?values.map(cell=>cell.trim()):null;};
+    const tableHeaders=new Set(),tableDelimiters=new Set(),tableRows=new Set();for(let index=0;index<lines.length-1;index++){if(tableRows.has(index))continue;const header=row(lines[index]),delimiter=row(lines[index+1]);if(header&&delimiter&&header.length===delimiter.length&&delimiter.every(cell=>/^:?-+:?$/.test(cell))&&!header.every(cell=>/^:?-+:?$/.test(cell))){tableHeaders.add(index);tableDelimiters.add(index+1);for(let next=index+2;next<lines.length&&row(lines[next])&&!/^ {0,3}#{1,6}\s/.test(lines[next]);next++)tableRows.add(next);}}
+    for (const [index,line] of [...lines, ''].entries()) {
+      if(tableHeaders.has(index)||tableDelimiters.has(index)){if(block.trim())result.push(block);block='';continue;}
+      if(tableRows.has(index)){if(block.trim())result.push(block);block='';result.push(line.trim());tableClaims.add(line.trim());continue;}
       if (/^ {0,3}#{1,6}\s/.test(line)) { if (block.trim()) result.push(block); block = ''; continue; }
       if (!line.trim() || /^\s*[-*+]\s+/.test(line) || /^\s*\|/.test(line)) { if (block.trim()) result.push(block); block = ''; }
       if (line.trim()) block += `${block ? ' ' : ''}${line.trim()}`;
@@ -301,10 +312,11 @@ function claims(stage, outputs, context, read) {
     if (!sections(doc.text).some((s) => s.name === 'Assumptions & Open Questions')) findings.push(`${doc.path}: missing Assumptions & Open Questions`);
     for (const s of sections(doc.text)) {
       if (s.rawName === 'Review') continue;
-      for (const block of blocks(s.lines)) {
-        if (/^\s*#|^\s*\|?[\s:|-]+\|?\s*$/.test(block)) continue;
+      const tableClaims=new Set();for (const block of blocks(s.lines,tableClaims)) {
+        if(s.name==='Assumptions & Open Questions'&&/^None\.?$/i.test(block.trim()))continue;
+        if (/^\s*#/.test(block)||!tableClaims.has(block)&&/^\s*\|?[\s:|-]+\|?\s*$/.test(block)) continue;
         if (s.name === 'Sources' && block === `- [scope] Workflow-selected scope: \`${scope}\`.` && register.has('scope')) continue;
-        const visible = block.replace(/(`+)(?!`)([^]*?)\1(?!`)/g, '');
+        const visible = withoutInlineCode(block);
         const tags = [...visible.matchAll(/(?<!\\)\[(desc|scope|Q\d+|memory:[\w.-]+|assumption)\]/g)].map((m) => m[1]);
         if (!tags.length) findings.push(`${doc.path}: uncited claim ${block.slice(0, 120)}`);
         for (const tag of tags) {
