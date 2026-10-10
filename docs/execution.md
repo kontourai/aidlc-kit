@@ -112,3 +112,5 @@ refuses altered proposals or definition bindings. Changing pending stages of a
 running plan requires a separately bound live recomposition decision.
 
 Live pending-stage add/skip uses the ordinary signed operator inbox and canonical Flow amendment ledger; see [recomposition.md](recomposition.md). The original request and provider budgets are retained.
+
+Summary questions and intent outputs retain their observed dispatch checkpoints across ordinary operator waits. Resume verifies the signed host checkpoint and current source/artifact basis before reusing the producer output; changed inputs require a new exact decision. These checkpoint signatures record host observation and do not constitute human approval.

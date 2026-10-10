@@ -4,9 +4,10 @@ import path from 'node:path';
 import { digest, readSnapshot } from './compile.mjs';
 import { readArtifact } from './artifacts.mjs';
 
-/** Host policy grants are not model statements or human signatures. */
-export function createControllerAuthority({policy,requestDigest,controllerRoot}){
-  if(!policy||typeof policy.reference!=='string'||!policy.reference||!Array.isArray(policy.purposes))throw new Error('Explicit registered operator policy required');
+
+/** Host-only retained observations are signed under the same private controller
+ * identity as exact decisions. Cache checksums never substitute for producer proof. */
+function controllerSigningIdentity(controllerRoot){
   const authorityRoot=path.join(controllerRoot,'authority');fs.mkdirSync(authorityRoot,{recursive:true,mode:0o700});
   const keyFile=path.join(authorityRoot,'host-private-key.pem');let privateKey,publicKey;
   if(fs.existsSync(keyFile)){privateKey=createPrivateKey(fs.readFileSync(keyFile));publicKey=createPublicKey(privateKey);}
@@ -15,6 +16,23 @@ export function createControllerAuthority({policy,requestDigest,controllerRoot})
   if(fs.existsSync(publicFile)){if(fs.readFileSync(publicFile,'utf8')!==publicPem)throw new Error('Host authority public key drifted');}
   else fs.writeFileSync(publicFile,publicPem,{flag:'wx',mode:0o444});
   const fingerprint=createHash('sha256').update(publicKey.export({type:'spki',format:'der'})).digest('hex');
+  return {authorityRoot,privateKey,publicKey,fingerprint};
+}
+
+export function sealControllerCheckpoint({controllerRoot,checkpoint}){
+ const {privateKey,fingerprint}=controllerSigningIdentity(controllerRoot);
+ const payload={version:'1.0',kind:'controller-observed-checkpoint',issuer:fingerprint,checkpoint_digest:digest(checkpoint)};
+ return {payload,signature:sign(null,Buffer.from(JSON.stringify(payload)),privateKey).toString('base64')};
+}
+export function verifyControllerCheckpoint({controllerRoot,checkpoint,envelope}){
+ const {publicKey,fingerprint}=controllerSigningIdentity(controllerRoot);
+ return envelope?.payload?.version==='1.0'&&envelope.payload.kind==='controller-observed-checkpoint'&&envelope.payload.issuer===fingerprint&&envelope.payload.checkpoint_digest===digest(checkpoint)&&typeof envelope.signature==='string'&&verify(null,Buffer.from(JSON.stringify(envelope.payload)),publicKey,Buffer.from(envelope.signature,'base64'));
+}
+
+/** Host policy grants are not model statements or human signatures. */
+export function createControllerAuthority({policy,requestDigest,controllerRoot}){
+  if(!policy||typeof policy.reference!=='string'||!policy.reference||!Array.isArray(policy.purposes))throw new Error('Explicit registered operator policy required');
+  const {authorityRoot,privateKey,publicKey,fingerprint}=controllerSigningIdentity(controllerRoot);
   const issued=new Map();
   for(const name of fs.readdirSync(authorityRoot).filter(name=>name.endsWith('.json')&&!name.endsWith('.input.json'))){const receipt=JSON.parse(fs.readFileSync(path.join(authorityRoot,name),'utf8'));if(receipt.payload?.issuer===fingerprint&&receipt.payload.request_digest===requestDigest&&verify(null,Buffer.from(JSON.stringify(receipt.payload)),publicKey,Buffer.from(receipt.signature,'base64')))issued.set(receipt.payload.id,receipt);}
   const port={kind:'trusted-host-policy',fingerprint,

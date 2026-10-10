@@ -26,6 +26,8 @@ test('npm tarball installs away from source and activates through public kit con
   const cli=path.join(consumer,'node_modules/@kontourai/flow-agents/build/src/cli.js');const workspace=consumer;
   command([process.execPath,cli,'kit','install',kit,'--dest',workspace],consumer);
   const activation=JSON.parse(command([process.execPath,cli,'kit','activate','--dest',workspace,'--format','json'],consumer));
+  const recomposition=JSON.parse(command([process.execPath,path.join(root,'test/installed-recomposition-proof.mjs'),consumer,scratch],consumer));assert.equal(recomposition.status,'pass');assert.equal(recomposition.model_or_provider_invoked,false);
+  for(const mode of ['input-source','input-artifact','recomputed-input']){const proof=JSON.parse(command([process.execPath,path.join(root,'test/installed-recomposition-proof.mjs'),consumer,scratch,mode],consumer));assert.equal(proof.status,'pass');assert.equal(proof.mode,mode);}
   assert.ok(activation);const registry=JSON.parse(readFileSync(path.join(workspace,'kits/local/installed-kits.json'),'utf8'));assert.ok(JSON.stringify(registry).includes('aidlc'));
   const requestFile=path.join(scratch,'request.json');writeFileSync(requestFile,JSON.stringify({schema:'kontour.kit.execution_request',version:'1.0',kit_id:'aidlc',workspace,run_id:'package-proof',prompt:'Probe',execution:{max_turns:1,timeout_s:30,model:'probe',runtime:'docker'},engine_sandbox:{}}));
   const probe=spawnSync(process.execPath,[cli,'kit','run','aidlc','--dest',workspace,'--request',requestFile,'--controller-root',path.join(scratch,'private')],{encoding:'utf8'});assert.notEqual(probe.status,0,probe.stderr);assert.match(probe.stderr,/Explicit immutable worker image required/);

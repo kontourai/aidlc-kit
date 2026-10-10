@@ -19,6 +19,7 @@ import {resolveComposition} from './composition.mjs';
 import {boundDefinition} from './definition.mjs';
 import {verifyRecompositionLedger,pendingRecomposition,childExecutionSnapshot} from './recomposition.mjs';
 import {withControllerLock} from './controller-lock.mjs';
+import {sealControllerCheckpoint,verifyControllerCheckpoint} from './authority.mjs';
 
 const safeId = value => typeof value === 'string' && /^[a-z0-9][a-z0-9._-]{0,127}$/.test(value);
 const inside = (root, file) => { const rel=path.relative(root,file);return rel!== '..'&&!rel.startsWith(`..${path.sep}`)&&!path.isAbsolute(rel); };
@@ -225,10 +226,20 @@ async function runAidlcUnlocked({request,executor,commandRunner,authority,contro
         const checkpoint={...stage,workspace_requires:false,reviewer:undefined,produces:questions.map(a=>a.id),optional_produces:[]};
         const checkpointContext=structuredClone(context);checkpointContext.shared.planning_only=true;checkpointContext.shared.summary_only=true;checkpointContext.shared.artifact_targets=questions;
         for(const entry of Object.values(checkpointContext.units))entry.artifact_targets=entry.artifact_targets.filter(a=>a.id.endsWith('-questions'));
-        const prepared=await dispatchStage({stage:checkpoint,units:stage.for_each?units:undefined,executor,context:checkpointContext,policy:request.parameters?.dispatch_policy??{},signal});
-        executions.push(...prepared.units.flatMap(u=>u.receipts??[]));
-        if(prepared.status!=='completed'){failure={stage:stageId,reason:'summary_failed',detail:prepared};await refuse(stageId,failure);break;}
-        const basis=currentRefs(workspace,questions);
+        // Retain observed questions across an operator wait. Regenerating them
+        // before checking the exact decision silently changes its subject.
+        const summaryFile=path.join(controllerRoot,'summary-checkpoints',`${stageId}.json`),summaryBinding=digest({request_digest:binding.request_digest,checkpoint,context:checkpointContext,source_digest:snapshotWorkspace(workspace).source_digest});
+        let saved=fs.existsSync(summaryFile)?json(summaryFile):null;
+        if(saved&&(!verifyControllerCheckpoint({controllerRoot,checkpoint:saved.checkpoint,envelope:saved.envelope})||saved.checkpoint.prepared?.status!=='completed'))throw new Error('Retained summary checkpoint changed');
+        let basis=currentRefs(workspace,questions);
+        const reusable=saved&&saved.checkpoint.binding===summaryBinding&&digest(basis)===digest(saved.checkpoint.basis);
+        if(!reusable){
+          const prepared=await dispatchStage({stage:checkpoint,units:stage.for_each?units:undefined,executor,context:checkpointContext,policy:request.parameters?.dispatch_policy??{},signal});
+          executions.push(...prepared.units.flatMap(u=>u.receipts??[]));
+          if(prepared.status!=='completed'){failure={stage:stageId,reason:'summary_failed',detail:prepared};await refuse(stageId,failure);break;}
+          basis=currentRefs(workspace,questions);
+          if(basis.length===questions.length&&basis.every(ref=>readArtifact(workspace,ref.path).text.trim())){const retained={binding:summaryBinding,basis,prepared};write(summaryFile,{checkpoint:retained,envelope:sealControllerCheckpoint({controllerRoot,checkpoint:retained})});}
+        }
         if(basis.length!==questions.length||basis.some(ref=>!readArtifact(workspace,ref.path).text.trim())){failure={stage:stageId,reason:'approval_basis_incomplete'};await refuse(stageId,failure);break;}
         const input={purpose:'summary-confirmation',stage:stageId,basis,source_digest:snapshotWorkspace(workspace).source_digest,request_digest:binding.request_digest};
         const grant=await authority?.authorize?.(input);
@@ -277,18 +288,25 @@ async function runAidlcUnlocked({request,executor,commandRunner,authority,contro
         if(operation?.status!=='completed'||await operationProvider.verify(operation,operationInput)!==true){failure={stage:stageId,reason:'operation_not_verified',detail:operation};await refuse(stageId,failure);break;}
         context.shared.operation_receipt=operation;
       }
-      let unitFlow;
+      let unitFlow,inputReplayed=false;
       try{
         let stageExecutor={...executor,async execute(dispatch){return executor.execute({...dispatch,beforePublication:async()=>{await dispatch.beforePublication?.();assertTestingPolicyCurrent(testing,testingInput);}});}};
         if(stage.for_each){unitFlow=await createUnitFlow({controllerRoot,parentRunId:request.run_id,stage,units,snapshotBasis:executor.snapshotBasis});stageExecutor=unitFlow.bindExecutor(stageExecutor);}
         const historicalFile=unitFlow?path.join(controllerRoot,'unit-dispatch',`${unitFlow.runId}.json`):null;
-        if(historicalFile&&fs.existsSync(historicalFile)){
+        const inputCheckpointFile=stageId==='intent-capture'?path.join(controllerRoot,'input-checkpoints',`${stageId}.json`):null;
+        const inputCheckpointBinding=inputCheckpointFile?digest({request_digest:binding.request_digest,stage,context,source_digest:snapshotWorkspace(workspace).source_digest}):null;
+        const inputSaved=inputCheckpointFile&&fs.existsSync(inputCheckpointFile)?json(inputCheckpointFile):null;
+        if(inputSaved&&(!verifyControllerCheckpoint({controllerRoot,checkpoint:inputSaved.checkpoint,envelope:inputSaved.envelope})||inputSaved.checkpoint.dispatched?.status!=='completed'))throw new Error('Retained input checkpoint changed');
+        const reuseInput=inputSaved&&inputSaved.checkpoint.binding===inputCheckpointBinding&&digest(currentRefs(workspace,artifacts))===digest(inputSaved.checkpoint.basis);
+        if(reuseInput){dispatched=structuredClone(inputSaved.checkpoint.dispatched);inputReplayed=true;}
+        else if(historicalFile&&fs.existsSync(historicalFile)){
           const saved=json(historicalFile);const canonical=await unitFlow.load();
           if(saved.unit_run_id!==unitFlow.runId||saved.stage_contract_digest!==digest(stage)||saved.dispatch_digest!==digest(saved.dispatched)||canonical.state.status!=='completed'||!units.every(unit=>canonical.state.gate_outcomes.some(gate=>gate.gate_id===`${unit.id}-gate`&&gate.status==='pass')))throw new Error('Historical unit dispatch is not canonically completed');
           dispatched=structuredClone(saved.dispatched);
         }else{
           dispatched=await dispatchStage({stage,units:stage.for_each?units:undefined,executor:stageExecutor,context,policy:{...request.parameters?.dispatch_policy,...(unitFlow?{requiresClaim:true}:{})},signal});
           if(historicalFile&&dispatched.status==='completed')write(historicalFile,{unit_run_id:unitFlow.runId,stage_contract_digest:digest(stage),dispatch_digest:digest(dispatched),dispatched});
+          if(inputCheckpointFile&&dispatched.status==='completed'){const retained={binding:inputCheckpointBinding,basis:currentRefs(workspace,artifacts),dispatched};write(inputCheckpointFile,{checkpoint:retained,envelope:sealControllerCheckpoint({controllerRoot,checkpoint:retained})});}
         }
         if(dispatched.status==='completed'&&unitFlow){
           const historicalJoin=await unitFlow.join();
@@ -299,7 +317,7 @@ async function runAidlcUnlocked({request,executor,commandRunner,authority,contro
           }else if(!historicalJoin.complete)dispatched={...dispatched,status:'blocked',reason:'canonical_unit_join_incomplete'};
         }
       }catch(error){failure={stage:stageId,reason:error.code==='execution_budget'||error.code==='storage_budget'?'budget_exhausted':'execution_failed',detail:{message:error.message,code:error.code??null}};await refuse(stageId,failure);break;}finally{await unitFlow?.close();}
-      executions.push(...dispatched.units.flatMap(u=>u.receipts??[]),...(dispatched.final_verification?.dispatch?.units??[]).flatMap(u=>u.receipts??[]));
+      if(!inputReplayed)executions.push(...dispatched.units.flatMap(u=>u.receipts??[]),...(dispatched.final_verification?.dispatch?.units??[]).flatMap(u=>u.receipts??[]));
       if(dispatched.status==='awaiting_decision'){
         const input={purpose:'review-disposition',stage:stageId,decision:dispatched,request_digest:binding.request_digest};const grant=await authority?.authorize?.(input);
         if(grant?.authorized&&authority.verify?.(grant.receipt,input)===true&&!unitFlow)dispatched.status='completed';
