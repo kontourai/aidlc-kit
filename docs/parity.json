@@ -12,7 +12,7 @@
   "canonical_kit_binding": "public-install-and-start-tested",
   "artifact_fingerprints": "implemented",
   "transitive_invalidation_projection": "implemented",
-  "automatic_invalidation_to_flow": "public-lifecycle-tested-on-flow-5.1.4",
+  "automatic_invalidation_to_flow": "public-lifecycle-tested-on-flow-5.2.0",
   "conditional_stage_resolution": "project-type-and-authorized-explicit-selection",
   "complete_sensor_suite": "component-tested",
   "human_approval_authentication": "exact-operator-policy-receipts-human-channel-required",
@@ -25,14 +25,31 @@
   "judgment_dissent_disposition": "operator-policy-required-with-audit-input",
   "unit_source_custody": "manifest-scoped-publication-jail",
   "native_ceremony_settings": "validated-review-sensor-summary-plan-collaborator-learning-and-skeleton-composition",
-  "construction_checkpoints": "selected-source-units-default-serial-unit-major-authenticated-command-and-per-unit-authority-component-tested"
+  "construction_checkpoints": "selected-source-units-default-serial-unit-major-authenticated-command-and-per-unit-authority-component-tested",
+  "live_pending_stage_recomposition": "signed-operator-public-flow-pending-forward-contract-tested"
  },
  "comparison": {
   "profile_structure": "implemented",
   "frozen_output_rubric": "implemented",
-  "paired_model_runs": "not_run",
-  "independent_semantic_grading": "evals-independent-hidden-oracle-implemented-live-runs-pending",
-  "effectiveness": "not_verified"
+  "paired_model_runs": "five-case-ten-cell-comparison-retained-zero-qualified-pairs",
+  "independent_semantic_grading": "independent-hidden-oracle-grades-retained-including-failures-and-unavailable-grading",
+  "effectiveness": "not_verified",
+  "measured_result": {
+   "evidence": "https://github.com/kontourai/evals/issues/240#issuecomment-6093708744",
+   "measurement_commit": "2332d071b7ffb225e8bc3e9e1b18473474e0d331",
+   "kit_commit": "80c4ea435b3fe457e51a34543d125b0fa5d7da41",
+   "runtime_version": "7.0.0",
+   "cases": 5,
+   "cells": 10,
+   "timeout_s": 600,
+   "max_workers": 32,
+   "max_provider_requests": 128,
+   "execution_qualified_pairs": 0,
+   "acceptance_delta": null,
+   "monetary_cost": null,
+   "human_review_minutes": null,
+   "does_not_qualify_current_live_recomposition": true
+  }
  },
  "deliberate_differences": [
   "Missing or unavailable checks never count as passing required evidence.",

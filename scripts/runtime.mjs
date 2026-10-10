@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import { startRun, loadRun, attachEvidence, evaluateRun, validateDefinition } from '@kontourai/flow';
+import { startRun, loadRun, attachEvidence, evaluateRun, validateDefinition, definitionDigest } from '@kontourai/flow';
 import { validateTrustBundle, buildTrustReport } from '@kontourai/surface';
 import { readSnapshot, compileProfile, digest, requestBindingDigest } from './compile.mjs';
 import { readArtifact, observeStage, projectInvalidation } from './artifacts.mjs';
@@ -16,6 +16,10 @@ import { constructionBlock, executeConstruction } from './construction.mjs';
 import {constructionCheckpointPolicy} from './construction-checkpoints.mjs';
 import {resolveTestingContract,assertTestingPolicyCurrent,validateTestingPlans,stampTestingPlan} from './testing-posture.mjs';
 import {resolveComposition} from './composition.mjs';
+import {boundDefinition} from './definition.mjs';
+import {verifyRecompositionLedger,pendingRecomposition,childExecutionSnapshot} from './recomposition.mjs';
+import {withControllerLock} from './controller-lock.mjs';
+import {retainedDispatch,checkpointRetryIdentity,checkpointContextBinding,loadRetainedDispatch,saveRetainedDispatch} from './dispatch-checkpoints.mjs';
 
 const safeId = value => typeof value === 'string' && /^[a-z0-9][a-z0-9._-]{0,127}$/.test(value);
 const inside = (root, file) => { const rel=path.relative(root,file);return rel!== '..'&&!rel.startsWith(`..${path.sep}`)&&!path.isAbsolute(rel); };
@@ -67,17 +71,6 @@ export async function refreshArtifactValidity({controllerRoot,runId,workspace,re
   return {projection,invalidated,deferred};
 }
 
-function boundDefinition(snapshot,profile,runId,projectType,omitted,settings){
-  const selected=structuredClone(snapshot);selected.stages=selected.stages.map(stage=>effectiveStage(stage,settings));selected.profiles[profile].stages=selected.profiles[profile].stages.filter(id=>!omitted.has(id));
-  const compiled=compileProfile(selected,profile,{projectType});
-  for(const [i,step]of compiled.flow.steps.entries()){
-    const source=selected.stages.find(s=>s.slug===step.id);const prior=compiled.flow.steps.slice(0,i).map(s=>s.id);
-    const artifactDeps=(source.consumes??[]).flatMap(input=>selected.stages.filter(s=>prior.includes(s.slug)&&[...(s.produces??[]),...(s.optional_produces??[])].includes(input.artifact)).slice(-1).map(s=>s.slug));
-    step.needs=[...new Set([...(step.needs??[]),...artifactDeps])];
-    for(const expectation of compiled.flow.gates[`${step.id}-gate`].expects)expectation.bundle_claim.subjectId=`${runId}/${step.id}`;
-  }
-  return {flow:validateDefinition(compiled.flow),stageIds:compiled.stages,selectedSnapshot:selected};
-}
 
 export function stageContext(snapshot,profile,stage,workspace,allArtifacts,request){
   const upstreamArtifacts={};for(const entry of allArtifacts){try{readArtifact(workspace,entry.path);(upstreamArtifacts[entry.id]??=[]).push(entry.path);}catch{}}
@@ -94,12 +87,19 @@ export function restoreUnits(workspace,records){
 }
 
 /** Complete lifecycle conductor. Flow's persisted cursor remains the authority. */
-export async function runAidlc({request,executor,commandRunner,authority,controllerRoot,signal,executionSlice,operationProvider,knowledge}){
+export async function runAidlc(options){
+ return withControllerLock(options.controllerRoot,()=>runAidlcUnlocked(options),{inheritedOwner:options.controllerExecutionOwner});
+}
+
+async function runAidlcUnlocked({request,executor,commandRunner,authority,controllerRoot,signal,executionSlice,operationProvider,knowledge}){
   const workspace=fs.realpathSync(request.workspace);controllerRoot=path.resolve(controllerRoot);
   fs.mkdirSync(controllerRoot,{recursive:true,mode:0o700});controllerRoot=fs.realpathSync(controllerRoot);
   if(inside(workspace,controllerRoot)||inside(controllerRoot,workspace))throw new Error('Controller state must be separate from model workspace');
   if(!safeId(request.run_id)||typeof request.prompt!=='string'||!request.prompt.trim())throw new Error('Bound run id and task prompt required');
-  const {snapshot,profile,composition}=resolveComposition(readSnapshot(),request.parameters??{}),defaults=snapshot.profiles[profile]?.defaults;
+  let {snapshot,profile,composition}=resolveComposition(readSnapshot(),request.parameters??{});
+  const originalProfileStages=[...snapshot.profiles[profile].stages];
+  if(executionSlice?.parentAdmission)snapshot=await childExecutionSnapshot({request,executionSlice});
+  const defaults=snapshot.profiles[profile]?.defaults;
   if(!defaults)throw new Error('Unknown profile');
   const settings=resolveCeremony(defaults,request.parameters?.ceremony??{});
   const projectType=request.parameters?.project_type??'brownfield';const omitted=new Set();
@@ -108,16 +108,17 @@ export async function runAidlc({request,executor,commandRunner,authority,control
     if(!Array.isArray(executionSlice.stageIds)||!executionSlice.stageIds.length||executionSlice.stageIds.some(id=>!snapshot.profiles[profile].stages.includes(id)))throw new Error('Invalid host execution slice');
     for(const id of snapshot.profiles[profile].stages)if(!executionSlice.stageIds.includes(id))omitted.add(id);
   }
-  for(const decision of request.parameters?.stage_decisions??[]){if(!snapshot.profiles[profile].stages.includes(decision.stage)||decision.execute!==false||!decision.reason)throw new Error('Invalid scoped stage decision');
+  for(const decision of request.parameters?.stage_decisions??[]){if(!originalProfileStages.includes(decision.stage)||decision.execute!==false||!decision.reason)throw new Error('Invalid scoped stage decision');
+    if(executionSlice?.parentAdmission&&!snapshot.profiles[profile].stages.includes(decision.stage))continue;
     const input={purpose:'stage-selection',stage:decision.stage,decision,request_digest:requestBindingDigest(request)};const grant=await authority?.authorize?.(input);
     if(!grant?.authorized||!grant.reference||authority.verify?.(grant.receipt,input)!==true)throw new Error('Stage selection needs verified host authority');omitted.add(decision.stage);}
-  const {flow,stageIds,selectedSnapshot}=boundDefinition(snapshot,profile,request.run_id,projectType,omitted,settings);
+  let {flow,stageIds,selectedSnapshot}=boundDefinition(snapshot,profile,request.run_id,projectType,omitted,settings);
   if(composition&&!executionSlice&&['workspace-scaffold','workspace-detection','state-init'].some(id=>!stageIds.includes(id)))throw new Error('Composition cannot skip initialization');
   if(composition?.strict_inputs&&!executionSlice)for(const [index,id]of stageIds.entries()){
     const stage=selectedSnapshot.stages.find(stage=>stage.slug===id);
     for(const input of stage.consumes??[])if(input.required&&(!input.conditional_on||input.conditional_on===projectType)&&!selectedSnapshot.stages.some(producer=>stageIds.slice(0,index).includes(producer.slug)&&[...(producer.produces??[]),...(producer.optional_produces??[])].includes(input.artifact)))throw new Error(`Required producer off path: ${id}/${input.artifact}`);
   }
-  const checkpointPolicy=constructionCheckpointPolicy(snapshot,stageIds,request.parameters??{});
+  let checkpointPolicy=constructionCheckpointPolicy(snapshot,stageIds,request.parameters??{});
   const bindingFile=path.join(controllerRoot,'binding.json');const binding={request_digest:requestBindingDigest(request),definition_digest:digest(flow),profile,project_type:projectType,upstream_commit:snapshot.upstream.commit,testing_policy_digest:testing.policy_digest,testing_contract_digest:testing.contract_digest};
   if(composition&&!executionSlice){
     const approvalFile=path.join(controllerRoot,'composition-approval.json');
@@ -128,6 +129,12 @@ export async function runAidlc({request,executor,commandRunner,authority,control
   }
   if(fs.existsSync(bindingFile)){if(JSON.stringify(json(bindingFile))!==JSON.stringify(binding))throw new Error('Resume input or definition changed');}
   else{write(bindingFile,binding);const definitionFile=path.join(controllerRoot,'definition.json');write(definitionFile,flow);await startRun(definitionFile,{cwd:controllerRoot,runId:request.run_id,params:{subject:request.run_id}});}
+  if(!executionSlice){
+    const effective=await verifyRecompositionLedger({request,controllerRoot,authority});
+    const pending=pendingRecomposition({request,controllerRoot,authority,run:effective.run});
+    if(pending)return {schema_version:'1.0',run_id:request.run_id,profile,ceremony:settings,definition_digest:effective.definition_digest,status:'waiting',failure:{reason:'awaiting_decision',stage:'live-recomposition',pending},records:fs.existsSync(path.join(controllerRoot,'stage-records.json'))?json(path.join(controllerRoot,'stage-records.json')):[],executions:[],canonical_state:effective.run.state,semantic_quality:'not_verified'};
+    if(effective.run.state.definition_amendments?.length){flow=effective.run.definition;stageIds=effective.stages;binding.definition_digest=effective.definition_digest;selectedSnapshot=structuredClone(selectedSnapshot);selectedSnapshot.profiles[profile].stages=stageIds;checkpointPolicy=constructionCheckpointPolicy(snapshot,stageIds,request.parameters??{});}
+  }
   fs.mkdirSync(path.join(workspace,'.aidlc'),{recursive:true});fs.writeFileSync(path.join(workspace,'.aidlc/project-description.json'),JSON.stringify(request.prompt)+'\n');
   const recordsFile=path.join(controllerRoot,'stage-records.json');let records=fs.existsSync(recordsFile)?json(recordsFile):[];
   const executions=[];let failure=null,units=null;
@@ -140,9 +147,12 @@ export async function runAidlc({request,executor,commandRunner,authority,control
   };
   const stageLimit=request.parameters?.max_gate_visits??128;let visits=0;
   while(!signal?.aborted&&visits++<stageLimit){
+    const admitted=await loadRun(request.run_id,controllerRoot);
+    if(!['active','completed'].includes(admitted.state.status)){failure={reason:admitted.state.status==='paused'?'authority_required':'canonical_run_inactive',stage:admitted.state.current_step,status:admitted.state.status};break;}
     await refreshArtifactValidity({controllerRoot,runId:request.run_id,workspace,records});write(recordsFile,records);
     units=executionSlice?.units??restoreUnits(workspace,records);
     const run=await loadRun(request.run_id,controllerRoot);if(run.state.status==='completed'){failure=null;break;}
+    if(run.state.status!=='active'){failure={reason:run.state.status==='paused'?'authority_required':'canonical_run_inactive',stage:run.state.current_step,status:run.state.status};break;}
     const stageId=run.state.current_step;if(!stageIds.includes(stageId)){failure={reason:'invalid_cursor',stage:stageId};break;}
     const retained=records.find(record=>record.stage===stageId&&!record.invalidated&&['pass','disabled'].includes(record.sensors?.status));
     if(retained){await evaluateRun(request.run_id,{cwd:controllerRoot});continue;}
@@ -154,7 +164,7 @@ export async function runAidlc({request,executor,commandRunner,authority,control
         runSlice:async({request:childRequest,authority:childAuthority,unit,children})=>{
           const childRoot=path.join(controllerRoot,'construction',childRequest.run_id);
           const beforeSource=snapshotWorkspace(workspace);
-          const result=await runAidlc({request:childRequest,executor,commandRunner,authority:childAuthority,controllerRoot:childRoot,signal,operationProvider,knowledge,executionSlice:{stageIds:block,units:[unit],observationSnapshot:selectedSnapshot,initialArtifacts,checkpointPolicy}});
+          const result=await runAidlc({request:childRequest,executor,commandRunner,authority:childAuthority,controllerRoot:childRoot,signal,operationProvider,knowledge,executionSlice:{stageIds:block,units:[unit],observationSnapshot:selectedSnapshot,initialArtifacts,checkpointPolicy,parentAdmission:{request:structuredClone(request),controllerRoot,definition:{id:flow.id,version:flow.version,digest:definitionDigest(flow)}}}});
           const afterSource=snapshotWorkspace(workspace),prior=new Map(beforeSource.files.map(file=>[file.path,file])),next=new Map(afterSource.files.map(file=>[file.path,file]));
           const sourceRefs=[...new Set([...prior.keys(),...next.keys()])].filter(file=>prior.get(file)?.digest!==next.get(file)?.digest).map(file=>({path:file,before_digest:prior.get(file)?.digest??null,digest:next.get(file)?.digest??null}));
           return {...result,controller_root:childRoot,construction_source_refs:sourceRefs};
@@ -165,7 +175,7 @@ export async function runAidlc({request,executor,commandRunner,authority,control
         const contract=effectiveStage(snapshot.stages.find(stage=>stage.slug===id),settings),parts=walk.children.map(child=>child.result.records.find(record=>record.stage===id));
         const combined={stage:id,profile,ceremony:settings,artifacts:parts.flatMap(record=>record.artifacts),sensors:{status:parts.every(record=>record.sensors.status==='disabled')?'disabled':'pass',checks:parts.flatMap(record=>record.sensors.checks)},tests:parts.flatMap(record=>record.tests),dispatch:{status:'completed',units:parts.flatMap(record=>record.dispatch.units),executions:parts.reduce((sum,record)=>sum+record.dispatch.executions,0)},construction_children:walk.children.map(child=>({unit:child.unit,run_id:child.result.run_id,checkpoint:child.checkpoint??null,unit_checkpoint:child.unit_checkpoint??null,verification:child.verification??null})),evidence:{},invalidated:false};
         if(contract.reviewer){
-          const context={shared:{task:request.prompt,profile,defaults:settings,stage:contract,upstream_artifacts:[...initialArtifacts,...combined.artifacts]},units:Object.fromEntries(units.map(unit=>[unit.id,{artifact_targets:artifactPaths(contract,unit.id)}]))};
+          let context={shared:{task:request.prompt,profile,defaults:settings,stage:contract,upstream_artifacts:[...initialArtifacts,...combined.artifacts]},units:Object.fromEntries(units.map(unit=>[unit.id,{artifact_targets:artifactPaths(contract,unit.id)}]))};
           const verification=await verifyFinalUnits({stage:contract,units,dispatched:combined.dispatch,context,executor,controllerRoot,parentRunId:request.run_id,parentAdmissionStage:id,signal,policy:request.parameters?.dispatch_policy??{}});
           if(verification.status!=='completed'){failure={stage:id,reason:'final_source_review_failed',detail:verification};await refuse(id,failure);break;}
           combined.dispatch.final_verification=verification;executions.push(...(verification.dispatch?.units??[]).flatMap(unit=>unit.receipts??[]));
@@ -193,15 +203,18 @@ export async function runAidlc({request,executor,commandRunner,authority,control
     const allArtifacts=[...(executionSlice?.initialArtifacts??[]),...records.filter(record=>!record.invalidated).flatMap(record=>record.artifacts??[])];let artifacts=artifactPaths(stage);
     if(stage.for_each)artifacts=units.flatMap(unit=>artifactPaths(stage,unit.id));
     fs.writeFileSync(path.join(workspace,'.aidlc/state.md'),`# AI-DLC State\n\n## Project\n- **Project**: ${request.prompt.replace(/\n/g,' ')}\n- **Project Description Source**: project-description.json\n- **Scope**: ${testing.contract.scope}\n- **Profile**: ${profile}\n- **Depth**: ${defaults.depth??'unspecified'}\n- **Test Strategy**: ${testing.contract.test_strategy}\n- **Project Type**: ${projectType}\n- **Current Stage**: ${stageId}\n${(executionSlice?.checkpointPolicy??checkpointPolicy).enabled?'- **Construction Checkpoints**: enabled\n- **Construction Iteration**: unit-major\n- **Construction Execution**: serial\n':''}`);
-    const context={shared:{task:request.prompt,profile,defaults:settings,testing_contract:testing.contract,testing_contract_rendered:testing.rendered,testing_policy_basis:testing.policy_basis,construction_checkpoint_policy:{enabled:(executionSlice?.checkpointPolicy??checkpointPolicy).enabled,iteration:'unit-major',execution:'serial'},workspace:'/workspace',stage,artifact_targets:artifacts,upstream_artifacts:allArtifacts,permissions:request.parameters?.permissions??{},plan_approval:'unapproved',prior_check_failures:records.find(record=>record.stage===stageId)?.sensors?.checks??[]},units:{}};
-    if(settings.learnings==='on'&&!records.some(record=>record.stage===stageId)){
+    let context={shared:{task:request.prompt,profile,defaults:settings,testing_contract:testing.contract,testing_contract_rendered:testing.rendered,testing_policy_basis:testing.policy_basis,construction_checkpoint_policy:{enabled:(executionSlice?.checkpointPolicy??checkpointPolicy).enabled,iteration:'unit-major',execution:'serial'},workspace:'/workspace',stage,artifact_targets:artifacts,upstream_artifacts:allArtifacts,permissions:request.parameters?.permissions??{},plan_approval:'unapproved',prior_check_failures:records.find(record=>record.stage===stageId)?.sensors?.checks??[]},units:{}};
+    if(settings.learnings==='on'){
       const diaries=(stage.for_each?units:[{id:'stage'}]).map(unit=>({id:'memory',stage:stageId,unit:unit.id==='stage'?null:unit.id,path:`.aidlc/artifacts/${stageId}${unit.id==='stage'?'':`/${unit.id}`}/memory.md`}));
       for(const diary of diaries){fs.mkdirSync(path.dirname(path.join(workspace,diary.path)),{recursive:true});if(!fs.existsSync(path.join(workspace,diary.path)))fs.writeFileSync(path.join(workspace,diary.path),'# Stage Learnings\n\n## Observations\n\n## Decisions\n\n## Follow-up\n');}
       artifacts.push(...diaries);context.shared.learning_diaries=diaries;context.shared.learning_diary=stage.for_each?null:diaries[0].path;
       context.shared.learning_protocol='At the first gate showing ask the operator for learnings; record only real observations and decisions in the stage diary. Capture through the Knowledge host port when configured.';
     }
     if(stage.for_each)for(const unit of units)context.units[unit.id]={artifact_targets:artifacts.filter(a=>a.unit===unit.id),upstream_artifacts:allArtifacts.filter(a=>!a.unit||a.unit===unit.id),learning_diary:context.shared.learning_diaries?.find(diary=>diary.unit===unit.id)?.path??null};
-    if((request.parameters?.source_write_stages??[]).includes(stageId)){
+    const initialContext=structuredClone(context),reviewBinding=()=>({request_digest:binding.request_digest,stage,context:initialContext,testing_contract_digest:testing.contract_digest,source_digest:snapshotWorkspace(workspace).source_digest}),reviewBasis=()=>currentRefs(workspace,[...allArtifacts,...artifacts]);
+    const retainedReview=stage.phase==='initialization'?null:loadRetainedDispatch({controllerRoot,kind:'review',stage:stageId,binding:reviewBinding(),admission:checkpointRetryIdentity(run),basis:reviewBasis()});
+    if(retainedReview)context=retainedReview.context;
+    if(!retainedReview&&(request.parameters?.source_write_stages??[]).includes(stageId)){
       const input={purpose:'source-change',stage:stageId,basis:snapshotWorkspace(workspace).source_digest,request_digest:binding.request_digest};const grant=await authority?.authorize?.(input);
       if(!grant?.authorized||authority.verify?.(grant.receipt,input)!==true){failure={stage:stageId,reason:'authority_required',detail:grant};await refuse(stageId,failure);break;}
       context.shared.source_write_authority=grant.reference;
@@ -211,15 +224,16 @@ export async function runAidlc({request,executor,commandRunner,authority,control
       for(const id of stageIds)fs.mkdirSync(path.join(workspace,'.aidlc/artifacts',id),{recursive:true});
       dispatched={status:'completed',units:[],executions:0,bootstrap:{workspace_digest:snapshotWorkspace(workspace).source_digest,definition_digest:binding.definition_digest}};
     }else{
+      if(!retainedReview){
       const questions=summaryTargets(stage,artifacts,settings);
       if(questions.length){
         const checkpoint={...stage,workspace_requires:false,reviewer:undefined,produces:questions.map(a=>a.id),optional_produces:[]};
         const checkpointContext=structuredClone(context);checkpointContext.shared.planning_only=true;checkpointContext.shared.summary_only=true;checkpointContext.shared.artifact_targets=questions;
         for(const entry of Object.values(checkpointContext.units))entry.artifact_targets=entry.artifact_targets.filter(a=>a.id.endsWith('-questions'));
-        const prepared=await dispatchStage({stage:checkpoint,units:stage.for_each?units:undefined,executor,context:checkpointContext,policy:request.parameters?.dispatch_policy??{},signal});
-        executions.push(...prepared.units.flatMap(u=>u.receipts??[]));
+        const retained=await retainedDispatch({controllerRoot,kind:'summary',stage:stageId,binding:{request_digest:binding.request_digest,checkpoint,context:checkpointContextBinding(checkpointContext),source_digest:snapshotWorkspace(workspace).source_digest},admission:checkpointRetryIdentity(run),observeBasis:()=>currentRefs(workspace,questions),execute:()=>dispatchStage({stage:checkpoint,units:stage.for_each?units:undefined,executor,context:checkpointContext,policy:request.parameters?.dispatch_policy??{},signal})});
+        const prepared=retained.dispatch,basis=retained.basis;
+        if(!retained.replayed)executions.push(...prepared.units.flatMap(u=>u.receipts??[]));
         if(prepared.status!=='completed'){failure={stage:stageId,reason:'summary_failed',detail:prepared};await refuse(stageId,failure);break;}
-        const basis=currentRefs(workspace,questions);
         if(basis.length!==questions.length||basis.some(ref=>!readArtifact(workspace,ref.path).text.trim())){failure={stage:stageId,reason:'approval_basis_incomplete'};await refuse(stageId,failure);break;}
         const input={purpose:'summary-confirmation',stage:stageId,basis,source_digest:snapshotWorkspace(workspace).source_digest,request_digest:binding.request_digest};
         const grant=await authority?.authorize?.(input);
@@ -243,10 +257,10 @@ export async function runAidlc({request,executor,commandRunner,authority,control
           const observation={...(result.observation??{worker_receipt:result.receipt}),host_testing_contract_rendering:transforms};
           return {...result,observation,worker_receipt:result.receipt,receipt:{...result.receipt,digest:digest(observation)},host_testing_contract_rendering:transforms,artifacts:result.artifacts.map(ref=>({...ref,digest:readArtifact(workspace,ref.path).digest}))};
         }};
-        const planned=await dispatchStage({stage:planning,units:stage.for_each?units:undefined,executor:planningExecutor,context:planningContext,policy:request.parameters?.dispatch_policy??{},signal});executions.push(...planned.units.flatMap(u=>u.receipts??[]));
-        if(planned.status!=='completed'){failure={stage:stageId,reason:'plan_failed',detail:planned};await refuse(stageId,failure);break;}
         const expected=artifacts.filter(a=>['code-generation-plan','unit-test-instructions'].includes(a.id));
-        const basis=currentRefs(workspace,expected);
+        const retained=await retainedDispatch({controllerRoot,kind:'plan',stage:stageId,binding:{request_digest:binding.request_digest,planning,context:checkpointContextBinding(planningContext),source_digest:snapshotWorkspace(workspace).source_digest},admission:checkpointRetryIdentity(run),observeBasis:()=>currentRefs(workspace,expected),execute:()=>dispatchStage({stage:planning,units:stage.for_each?units:undefined,executor:planningExecutor,context:planningContext,policy:request.parameters?.dispatch_policy??{},signal})});
+        const planned=retained.dispatch,basis=retained.basis;if(!retained.replayed)executions.push(...planned.units.flatMap(u=>u.receipts??[]));
+        if(planned.status!=='completed'){failure={stage:stageId,reason:'plan_failed',detail:planned};await refuse(stageId,failure);break;}
         if(basis.length!==expected.length||basis.some(ref=>!readArtifact(workspace,ref.path).text.trim())){failure={stage:stageId,reason:'approval_basis_incomplete'};await refuse(stageId,failure);break;}
         assertTestingPolicyCurrent(testing,testingInput);
         let testingBasis;
@@ -268,18 +282,43 @@ export async function runAidlc({request,executor,commandRunner,authority,control
         if(operation?.status!=='completed'||await operationProvider.verify(operation,operationInput)!==true){failure={stage:stageId,reason:'operation_not_verified',detail:operation};await refuse(stageId,failure);break;}
         context.shared.operation_receipt=operation;
       }
-      let unitFlow;
+      }
+      let unitFlow,inputReplayed=Boolean(retainedReview);
       try{
         let stageExecutor={...executor,async execute(dispatch){return executor.execute({...dispatch,beforePublication:async()=>{await dispatch.beforePublication?.();assertTestingPolicyCurrent(testing,testingInput);}});}};
         if(stage.for_each){unitFlow=await createUnitFlow({controllerRoot,parentRunId:request.run_id,stage,units,snapshotBasis:executor.snapshotBasis});stageExecutor=unitFlow.bindExecutor(stageExecutor);}
         const historicalFile=unitFlow?path.join(controllerRoot,'unit-dispatch',`${unitFlow.runId}.json`):null;
-        if(historicalFile&&fs.existsSync(historicalFile)){
-          const saved=json(historicalFile);const canonical=await unitFlow.load();
-          if(saved.unit_run_id!==unitFlow.runId||saved.stage_contract_digest!==digest(stage)||saved.dispatch_digest!==digest(saved.dispatched)||canonical.state.status!=='completed'||!units.every(unit=>canonical.state.gate_outcomes.some(gate=>gate.gate_id===`${unit.id}-gate`&&gate.status==='pass')))throw new Error('Historical unit dispatch is not canonically completed');
-          dispatched=structuredClone(saved.dispatched);
-        }else{
-          dispatched=await dispatchStage({stage,units:stage.for_each?units:undefined,executor:stageExecutor,context,policy:{...request.parameters?.dispatch_policy,...(unitFlow?{requiresClaim:true}:{})},signal});
-          if(historicalFile&&dispatched.status==='completed')write(historicalFile,{unit_run_id:unitFlow.runId,stage_contract_digest:digest(stage),dispatch_digest:digest(dispatched),dispatched});
+        const executeStage=async()=>{
+          if(historicalFile&&fs.existsSync(historicalFile)){
+            const saved=json(historicalFile);const canonical=await unitFlow.load();
+            if(saved.unit_run_id!==unitFlow.runId||saved.stage_contract_digest!==digest(stage)||saved.dispatch_digest!==digest(saved.dispatched)||canonical.state.status!=='completed'||!units.every(unit=>canonical.state.gate_outcomes.some(gate=>gate.gate_id===`${unit.id}-gate`&&gate.status==='pass')))throw new Error('Historical unit dispatch is not canonically completed');
+            return structuredClone(saved.dispatched);
+          }
+          const observed=await dispatchStage({stage,units:stage.for_each?units:undefined,executor:stageExecutor,context,policy:{...request.parameters?.dispatch_policy,...(unitFlow?{requiresClaim:true}:{})},signal});
+          if(historicalFile&&observed.status==='completed')write(historicalFile,{unit_run_id:unitFlow.runId,stage_contract_digest:digest(stage),dispatch_digest:digest(observed),dispatched:observed});
+          return observed;
+        };
+        if(retainedReview)dispatched=retainedReview.prepared;
+        else if(stageId==='intent-capture'){
+          const retained=await retainedDispatch({controllerRoot,kind:'input',stage:stageId,binding:{request_digest:binding.request_digest,stage,context:checkpointContextBinding(context),source_digest:snapshotWorkspace(workspace).source_digest},admission:checkpointRetryIdentity(run),observeBasis:()=>currentRefs(workspace,artifacts),execute:executeStage});dispatched=retained.dispatch;inputReplayed=retained.replayed;
+        }else dispatched=await executeStage();
+        if(dispatched.status==='awaiting_decision'){
+          if(!retainedReview)saveRetainedDispatch({controllerRoot,kind:'review',stage:stageId,binding:reviewBinding(),admission:checkpointRetryIdentity(run),basis:reviewBasis(),dispatch:dispatched,context});
+          const input={purpose:'review-disposition',stage:stageId,decision:dispatched,request_digest:binding.request_digest};const grant=await authority?.authorize?.(input);
+          if(grant?.authorized&&authority.verify?.(grant.receipt,input)===true){
+            const prior=structuredClone(dispatched),approved=new Map(prior.units.filter(record=>record.status==='awaiting_decision').map(record=>[record.id,record]));
+            const resumedExecutor={...stageExecutor,verifyResume:observed=>digest(observed)===digest(prior),async decide(decision){
+              const record=approved.get(decision.unit);
+              if(!record||decision.continuation_phase!==(record.continuation?.phase??null)||digest(decision.execution_receipts)!==digest(record.receipts.map(observed=>observed.receipt))||digest(decision.basis)!==digest(record.basis)||digest(decision.review_receipts)!==digest(record.reviews.map(review=>review.receipt))||digest(decision.findings)!==digest(record.findings)||digest(decision.dissent)!==digest(record.dissent))return {authorized:false,reason:'new_unit_requires_current_disposition'};
+              return {authorized:true,decision:'accept',reference:grant.reference};
+            }};
+            dispatched=await dispatchStage({stage,units:stage.for_each?units:undefined,executor:resumedExecutor,context,policy:{...request.parameters?.dispatch_policy,...(unitFlow?{requiresClaim:true}:{})},signal,resume:prior});
+            if(!inputReplayed)executions.push(...prior.units.flatMap(record=>record.receipts));const priorReceipts=new Set(prior.units.flatMap(record=>record.receipts.map(receipt=>receipt.receipt.id)));executions.push(...dispatched.units.flatMap(record=>record.receipts.filter(receipt=>!priorReceipts.has(receipt.receipt.id))));inputReplayed=true;
+            if(dispatched.status==='awaiting_decision'){
+              saveRetainedDispatch({controllerRoot,kind:'review',stage:stageId,binding:reviewBinding(),admission:checkpointRetryIdentity(run),basis:reviewBasis(),dispatch:dispatched,context});
+              const nextInput={purpose:'review-disposition',stage:stageId,decision:dispatched,request_digest:binding.request_digest},next=await authority?.authorize?.(nextInput);dispatched.pending=next?.pending??null;
+            }
+          }else dispatched.pending=dispatched.units.flatMap(unit=>unit.decisions??[]).findLast(decision=>decision.response?.pending)?.response.pending??grant?.pending??null;
         }
         if(dispatched.status==='completed'&&unitFlow){
           const historicalJoin=await unitFlow.join();
@@ -290,12 +329,7 @@ export async function runAidlc({request,executor,commandRunner,authority,control
           }else if(!historicalJoin.complete)dispatched={...dispatched,status:'blocked',reason:'canonical_unit_join_incomplete'};
         }
       }catch(error){failure={stage:stageId,reason:error.code==='execution_budget'||error.code==='storage_budget'?'budget_exhausted':'execution_failed',detail:{message:error.message,code:error.code??null}};await refuse(stageId,failure);break;}finally{await unitFlow?.close();}
-      executions.push(...dispatched.units.flatMap(u=>u.receipts??[]),...(dispatched.final_verification?.dispatch?.units??[]).flatMap(u=>u.receipts??[]));
-      if(dispatched.status==='awaiting_decision'){
-        const input={purpose:'review-disposition',stage:stageId,decision:dispatched,request_digest:binding.request_digest};const grant=await authority?.authorize?.(input);
-        if(grant?.authorized&&authority.verify?.(grant.receipt,input)===true&&!unitFlow)dispatched.status='completed';
-        else dispatched.pending=dispatched.units.flatMap(unit=>unit.decisions??[]).findLast(decision=>decision.response?.pending)?.response.pending??grant?.pending??null;
-      }
+      if(!inputReplayed)executions.push(...dispatched.units.flatMap(u=>u.receipts??[]));executions.push(...(dispatched.final_verification?.dispatch?.units??[]).flatMap(u=>u.receipts??[]));
       if(dispatched.status!=='completed'){failure={stage:stageId,reason:dispatched.reason==='execution_budget'||dispatched.reason==='storage_budget'?'budget_exhausted':dispatched.reason??dispatched.status,detail:dispatched};await refuse(stageId,failure);break;}
       if(context.shared.approved_summary_basis?.some(ref=>readArtifact(workspace,ref.path).digest!==ref.digest)){failure={stage:stageId,reason:'approved_summary_changed'};await refuse(stageId,failure);break;}
       assertTestingPolicyCurrent(testing,testingInput);

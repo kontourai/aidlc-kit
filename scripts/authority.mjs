@@ -4,9 +4,10 @@ import path from 'node:path';
 import { digest, readSnapshot } from './compile.mjs';
 import { readArtifact } from './artifacts.mjs';
 
-/** Host policy grants are not model statements or human signatures. */
-export function createControllerAuthority({policy,requestDigest,controllerRoot}){
-  if(!policy||typeof policy.reference!=='string'||!policy.reference||!Array.isArray(policy.purposes))throw new Error('Explicit registered operator policy required');
+
+/** Host-only retained observations are signed under the same private controller
+ * identity as exact decisions. Cache checksums never substitute for producer proof. */
+function controllerSigningIdentity(controllerRoot){
   const authorityRoot=path.join(controllerRoot,'authority');fs.mkdirSync(authorityRoot,{recursive:true,mode:0o700});
   const keyFile=path.join(authorityRoot,'host-private-key.pem');let privateKey,publicKey;
   if(fs.existsSync(keyFile)){privateKey=createPrivateKey(fs.readFileSync(keyFile));publicKey=createPublicKey(privateKey);}
@@ -15,6 +16,23 @@ export function createControllerAuthority({policy,requestDigest,controllerRoot})
   if(fs.existsSync(publicFile)){if(fs.readFileSync(publicFile,'utf8')!==publicPem)throw new Error('Host authority public key drifted');}
   else fs.writeFileSync(publicFile,publicPem,{flag:'wx',mode:0o444});
   const fingerprint=createHash('sha256').update(publicKey.export({type:'spki',format:'der'})).digest('hex');
+  return {authorityRoot,privateKey,publicKey,fingerprint};
+}
+
+export function sealControllerCheckpoint({controllerRoot,checkpoint}){
+ const {privateKey,fingerprint}=controllerSigningIdentity(controllerRoot);
+ const payload={version:'1.0',kind:'controller-observed-checkpoint',issuer:fingerprint,checkpoint_digest:digest(checkpoint)};
+ return {payload,signature:sign(null,Buffer.from(JSON.stringify(payload)),privateKey).toString('base64')};
+}
+export function verifyControllerCheckpoint({controllerRoot,checkpoint,envelope}){
+ const {publicKey,fingerprint}=controllerSigningIdentity(controllerRoot);
+ return envelope?.payload?.version==='1.0'&&envelope.payload.kind==='controller-observed-checkpoint'&&envelope.payload.issuer===fingerprint&&envelope.payload.checkpoint_digest===digest(checkpoint)&&typeof envelope.signature==='string'&&verify(null,Buffer.from(JSON.stringify(envelope.payload)),publicKey,Buffer.from(envelope.signature,'base64'));
+}
+
+/** Host policy grants are not model statements or human signatures. */
+export function createControllerAuthority({policy,requestDigest,controllerRoot}){
+  if(!policy||typeof policy.reference!=='string'||!policy.reference||!Array.isArray(policy.purposes))throw new Error('Explicit registered operator policy required');
+  const {authorityRoot,privateKey,publicKey,fingerprint}=controllerSigningIdentity(controllerRoot);
   const issued=new Map();
   for(const name of fs.readdirSync(authorityRoot).filter(name=>name.endsWith('.json')&&!name.endsWith('.input.json'))){const receipt=JSON.parse(fs.readFileSync(path.join(authorityRoot,name),'utf8'));if(receipt.payload?.issuer===fingerprint&&receipt.payload.request_digest===requestDigest&&verify(null,Buffer.from(JSON.stringify(receipt.payload)),publicKey,Buffer.from(receipt.signature,'base64')))issued.set(receipt.payload.id,receipt);}
   const port={kind:'trusted-host-policy',fingerprint,
@@ -50,9 +68,12 @@ authorizeFinding:async()=>({authorized:false,reason:'finding_requires_specific_o
   const policyAuthorize=port.authorize;
   port.authorize=async input=>{
     if(input.request_digest!==requestDigest)return {authorized:false,reason:'request_binding_mismatch'};
-    const accepted=[...issued.values()].find(receipt=>receipt.payload.kind==='controller-decision'&&receipt.payload.input_digest===decisionBindingDigest(input)&&receipt.payload.request_digest===requestDigest);
+    const decisions=[...issued.values()].filter(receipt=>receipt.payload.kind==='controller-decision'&&receipt.payload.input_digest===decisionBindingDigest(input)&&receipt.payload.request_digest===requestDigest);
+    const denied=decisions.find(receipt=>receipt.payload.decision==='deny');
+    if(denied)return {authorized:false,reason:'explicit_operator_denial',reference:`controller-decision:${denied.payload.id}`,decision_kind:'host-observed-operator-interaction',receipt:denied};
+    const accepted=decisions.find(receipt=>receipt.payload.decision!=='deny');
     if(accepted)return {authorized:true,reference:`controller-decision:${accepted.payload.id}`,decision_kind:'host-observed-operator-interaction',receipt:accepted};
-    const response=await policyAuthorize(input);if(response.authorized)return response;
+    const response=input.purpose==='live-recomposition'?{authorized:false,reason:'live_recomposition_requires_operator_interaction'}:await policyAuthorize(input);if(response.authorized)return response;
     if(!DECISION_PURPOSES.includes(input.purpose))return response;
     const pendingRoot=path.join(authorityRoot,'pending');fs.mkdirSync(pendingRoot,{recursive:true,mode:0o700});
     const id=decisionBindingDigest(input),pendingFile=path.join(pendingRoot,`${id}.json`);
@@ -72,10 +93,10 @@ export function decisionBindingDigest(input){
   return digest(bound);
 }
 
-const DECISION_PURPOSES=['profile-composition','stage-selection','source-change','summary-confirmation','input-confirmation','code-plan','construction-verification-command','construction-checkpoint','skeleton-checkpoint','review-disposition','deployment','operation'];
+const DECISION_PURPOSES=['live-recomposition','profile-composition','stage-selection','source-change','summary-confirmation','input-confirmation','code-plan','construction-verification-command','construction-checkpoint','skeleton-checkpoint','review-disposition','deployment','operation'];
 /** Trusted CLI interaction. This observes an operator action, not a human signature. */
 export function recordControllerDecision({controllerRoot,pendingFile,reference,decision='approve',disposition}) {
-  if(typeof reference!=='string'||!reference.trim()||reference.length>2048||decision!=='approve')throw new Error('Explicit approval and reference required');
+  if(typeof reference!=='string'||!reference.trim()||reference.length>2048||!['approve','deny'].includes(decision))throw new Error('Explicit decision and reference required');
   const root=fs.realpathSync(controllerRoot),authorityRoot=path.join(root,'authority'),file=fs.realpathSync(pendingFile),pendingRoot=fs.realpathSync(path.join(authorityRoot,'pending'));
   if(path.dirname(file)!==pendingRoot)throw new Error('Decision input must be a retained private pending request');
   const privateKey=createPrivateKey(fs.readFileSync(path.join(authorityRoot,'host-private-key.pem'))),publicKey=createPublicKey(privateKey);
@@ -84,9 +105,9 @@ export function recordControllerDecision({controllerRoot,pendingFile,reference,d
   const bindingFile=path.join(root,'binding.json');if(fs.existsSync(bindingFile)&&JSON.parse(fs.readFileSync(bindingFile,'utf8')).request_digest!==input.request_digest)throw new Error('Pending decision request is stale');
   const dissent=[...(input.dissent??[]),...(input.decision?.units?.flatMap(unit=>unit.dissent??[])??[])];
   const findings=input.findings??input.decision?.units?.flatMap(unit=>unit.findings??[])??[];
-  if(dissent.some(objection=>objection.kind==='judgment')&&disposition?.accept_judgment_dissent!==true)throw new Error('Judgment dissent requires explicit operator disposition');
-  if(findings.some(finding=>finding.status==='open'&&!disposition?.accepted_finding_ids?.includes(finding.id)))throw new Error('Open findings require explicit operator disposition by id');
-  const payload={version:'1.0',id:randomUUID(),kind:'controller-decision',issuer:fingerprint,reference,decision_kind:'host-observed-operator-interaction',request_digest:input.request_digest,purpose:input.purpose,stage:input.stage,input_digest:decisionBindingDigest(input),disposition:disposition??null,issued_at:new Date().toISOString()};
+  if(decision==='approve'&&dissent.some(objection=>objection.kind==='judgment')&&disposition?.accept_judgment_dissent!==true)throw new Error('Judgment dissent requires explicit operator disposition');
+  if(decision==='approve'&&findings.some(finding=>finding.status==='open'&&!disposition?.accepted_finding_ids?.includes(finding.id)))throw new Error('Open findings require explicit operator disposition by id');
+  const payload={version:'1.0',id:randomUUID(),kind:'controller-decision',issuer:fingerprint,reference,decision,decision_kind:'host-observed-operator-interaction',request_digest:input.request_digest,purpose:input.purpose,stage:input.stage,input_digest:decisionBindingDigest(input),disposition:disposition??null,issued_at:new Date().toISOString()};
   const receipt={payload,signature:sign(null,Buffer.from(JSON.stringify(payload)),privateKey).toString('base64')};
   fs.writeFileSync(path.join(authorityRoot,`${payload.id}.input.json`),JSON.stringify(input,null,2)+'\n',{flag:'wx',mode:0o600});fs.writeFileSync(path.join(authorityRoot,`${payload.id}.json`),JSON.stringify(receipt)+'\n',{flag:'wx',mode:0o600});
   return {reference:`controller-decision:${payload.id}`,decision_kind:'host-observed-operator-interaction',receipt};
