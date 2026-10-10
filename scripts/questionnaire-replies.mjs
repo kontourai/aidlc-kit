@@ -29,6 +29,24 @@ export function questionnaireSubject({workspace,basis,producer,checkpointBinding
  must(Buffer.byteLength(JSON.stringify(documents))<=49152,'Questionnaire aggregate subject exceeds bounded operator context');
  return documents.length?{version:'1.0',workspace:fs.realpathSync(workspace),workspace_identity:(()=>{const stat=fs.lstatSync(fs.realpathSync(workspace));return `${stat.dev}:${stat.ino}`;})(),producer_digest:digest(producer),checkpoint_binding:checkpointBinding,admission_digest:digest(admission),documents}:undefined;
 }
+/** Only a host-declared control cell has an enum. Ordinary questionnaire
+ * answers remain free-form. Control values are exact declared strings. */
+function questionnaireChoiceConstraints(document){
+ const constraints=document.choice_constraints??{},required=document.required_choice_cells??[];
+ must(constraints&&typeof constraints==='object'&&!Array.isArray(constraints),'Malformed questionnaire choice constraints');
+ must(Array.isArray(required)&&new Set(required).size===required.length&&required.every(id=>document.cells.some(cell=>cell.id===id)&&Object.hasOwn(constraints,id)),'Required questionnaire control choice constraint missing');
+ for(const [id,constraint]of Object.entries(constraints)){
+  must(document.cells.some(cell=>cell.id===id)&&constraint&&typeof constraint==='object'&&!Array.isArray(constraint)&&Object.keys(constraint).every(key=>key==='values')&&Array.isArray(constraint.values)&&constraint.values.length>0&&constraint.values.length<=16&&new Set(constraint.values).size===constraint.values.length&&constraint.values.every(explicitAnswer),'Malformed questionnaire control choice');
+ }
+ return constraints;
+}
+export function validateQuestionnaireChoices(document,text,submittedAnswers){
+ const constraints=questionnaireChoiceConstraints(document),cells=questionnaireCells(text),lines=text.split(/\r?\n/).filter(line=>/^[ \t]*\[Answer\]:/.test(line));
+ for(const [id,constraint]of Object.entries(constraints)){
+  const cell=cells.find(cell=>cell.id===id),index=cells.findIndex(cell=>cell.id===id),line=lines[index],raw=/^[ \t]*\[Answer\]:(.*)$/.exec(line??'')?.[1],canonicalRaw=raw?.startsWith(' ')?raw.slice(1):raw;
+  must(cell&&constraint.values.includes(cell.value)&&constraint.values.includes(canonicalRaw)&&(!submittedAnswers||!Object.hasOwn(submittedAnswers,id)||constraint.values.includes(submittedAnswers[id])),`Invalid declared choice for ${id} (${cell?.heading??id})`);
+ }
+}
 function validateCurrentSubject(input){
  const subject=input.questionnaire;must(subject?.version==='1.0'&&Array.isArray(subject.documents)&&subject.documents.length>0&&subject.documents.length<=128,'Invalid questionnaire subject');
  const stat=fs.lstatSync(subject.workspace);must(!stat.isSymbolicLink()&&stat.isDirectory()&&`${stat.dev}:${stat.ino}`===subject.workspace_identity,'Questionnaire workspace custody changed');createPublicationJail(subject.workspace).preflight(subject.documents.map(doc=>doc.path));
@@ -45,6 +63,7 @@ export function intakeQuestionnaireReply({input,disposition}){
  must(Object.keys(reply).every(key=>['version','mode','documents'].includes(key))&&Array.isArray(reply.documents)&&reply.documents.length===subject.documents.length,'Questionnaire reply document inventory changed');
  const documents=subject.documents.map(doc=>{const selected=reply.documents.filter(item=>item.path===doc.path);must(selected.length===1,'Questionnaire reply has unknown or duplicate document');const item=selected[0];must(Object.keys(item).every(key=>['path','answers'].includes(key)),'Unknown questionnaire reply field');
   const text=reply.mode==='answers'?fillQuestionnaire(doc.original_text,item.answers,doc.confirmed_answers):readArtifact(subject.workspace,doc.path).text;
+  validateQuestionnaireChoices(doc,text,reply.mode==='answers'?item.answers:undefined);
   must(questionnaireContract(text)===questionnaireContract(doc.original_text)&&questionnaireCells(text).every(cell=>explicitAnswer(cell.value)),'Every required answer cell must be explicitly completed');
   must([doc.original_digest,digest(text)].includes(readArtifact(subject.workspace,doc.path).digest),'Questionnaire answer edits conflict with this exact reply');
   must(Object.entries(doc.confirmed_answers??{}).every(([id,value])=>questionnaireCells(text).find(cell=>cell.id===id)?.value===value),'Reply changed previously confirmed answer cells');
@@ -58,7 +77,7 @@ export function materializeQuestionnaireReply({input,receipt}){
  const subject=validateCurrentSubject(input),reply=receipt.payload.disposition?.questionnaire_reply;must(receipt.payload.decision==='approve'&&reply?.version==='1.0'&&reply.source_digest===input.source_digest&&reply.producer_digest===subject.producer_digest,'Questionnaire reply is not an exact approved host observation');
  must(reply.documents.length===subject.documents.length,'Questionnaire reply inventory changed');
  const publication=createPublicationJail(subject.workspace).preflight(reply.documents.map(doc=>doc.path));
- for(const doc of reply.documents){const original=subject.documents.find(item=>item.path===doc.path);must(original&&doc.original_digest===original.original_digest&&digest(doc.text)===doc.reply_digest&&questionnaireContract(doc.text)===questionnaireContract(original.original_text)&&questionnaireCells(doc.text).every(cell=>explicitAnswer(cell.value)),'Questionnaire reply contract or digest changed');const current=readArtifact(subject.workspace,doc.path);must([original.original_digest,doc.reply_digest].includes(current.digest),'Questionnaire answer basis changed after operator decision');}
+ for(const doc of reply.documents){const original=subject.documents.find(item=>item.path===doc.path);must(original&&doc.original_digest===original.original_digest&&digest(doc.text)===doc.reply_digest&&questionnaireContract(doc.text)===questionnaireContract(original.original_text)&&questionnaireCells(doc.text).every(cell=>explicitAnswer(cell.value)),'Questionnaire reply contract or digest changed');validateQuestionnaireChoices(original,doc.text);const current=readArtifact(subject.workspace,doc.path);must([original.original_digest,doc.reply_digest].includes(current.digest),'Questionnaire answer basis changed after operator decision');}
  for(const doc of reply.documents)if(readArtifact(subject.workspace,doc.path).digest!==doc.reply_digest)publication.write(doc.path,Buffer.from(doc.text));
  return reply;
 }

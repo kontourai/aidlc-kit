@@ -42,6 +42,8 @@ model wrote. Model text is not a previously confirmed answer. Later derived
 questionnaires identify previously confirmed cells through their signed operator
 receipts; only new or explicitly reset cells need answers. Unknown IDs, missing
 answers, blank/underscore placeholders, and changed confirmed answers refuse.
+Control cells declare their exact allowed values in the signed subject. An assumption or revised-summary control answer must equal one of those full strings; expanded prose, prefixes, and short letters refuse before any decision or host artifact write. Business-answer cells remain free-form.
+
 Answers are bounded single-line text. Question wording, source registers,
 options, and all other document text remain protected.
 
