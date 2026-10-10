@@ -55,7 +55,7 @@ Prepare the pinned upstream checkout and its already generated Claude distributi
 data separately. Then run from this repository:
 
 ```sh
-node examples/aidlc/scripts/import-upstream.mjs /absolute/path/to/aidlc-workflows
+node scripts/import-upstream.mjs /absolute/path/to/aidlc-workflows
 ```
 
 An optional second argument selects a temporary output directory for comparison.
