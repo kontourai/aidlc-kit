@@ -2,7 +2,7 @@
 import {executeRequestFile} from './run.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
-import {withControllerLock} from './controller-lock.mjs';
+import {withControllerLock,recoverControllerLock} from './controller-lock.mjs';
 import {recomposeRun} from './recomposition.mjs';
 import {recordControllerInteraction} from './authority.mjs';
 import {readSnapshot,generatedFiles} from './compile.mjs';
@@ -14,6 +14,8 @@ if(command==='run'){
  const result=await executeRequestFile({requestFile,controllerRoot,authFile:get('--auth-file')});
  console.log(JSON.stringify(result));
  if(!['completed','waiting'].includes(result.status))process.exitCode=1;
+}else if(command==='recover-controller'){
+ const controllerRoot=get('--controller-root');if(!controllerRoot)throw new Error('Usage: aidlc recover-controller --controller-root <private-root>');console.log(JSON.stringify(recoverControllerLock(controllerRoot)));
 }else if(command==='recompose'){
  const requestFile=get('--request'),controllerRoot=get('--controller-root'),proposalFile=get('--proposal');
  if(!requestFile||!controllerRoot||!proposalFile)throw new Error('Usage: aidlc recompose --request <original-kit-request.json> --controller-root <private-root> --proposal <pending-stage-delta.json>');
@@ -32,5 +34,5 @@ if(command==='run'){
 else if(command==='check'){
  const {spawnSync}=await import('node:child_process');
  const result=spawnSync(process.execPath,[new URL('./compile.mjs',import.meta.url).pathname,'--check'],{stdio:'inherit'});process.exitCode=result.status??1;
-}else if(command==='--help'||command==='help'||!command)console.log('aidlc profiles | check | recompose --request <original-kit-request.json> --controller-root <private-root> --proposal <pending-stage-delta.json> | run --request <kit-request.json> --controller-root <private-root> --auth-file <host-auth.json> | decisions --controller-root <private-root> | decide --controller-root <private-root> --pending <signed-pending.json> --reference <operator-reference>');
+}else if(command==='--help'||command==='help'||!command)console.log('aidlc profiles | check | recover-controller --controller-root <private-root> | recompose --request <original-kit-request.json> --controller-root <private-root> --proposal <pending-stage-delta.json> | run --request <kit-request.json> --controller-root <private-root> --auth-file <host-auth.json> | decisions --controller-root <private-root> | decide --controller-root <private-root> --pending <signed-pending.json> --reference <operator-reference>');
 else throw new Error(`Unknown command: ${command}`);

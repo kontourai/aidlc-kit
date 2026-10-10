@@ -9,7 +9,10 @@ import { createCommandRunner } from './commands.mjs';
 import {createCommandOperationProvider,createOperationCommandRunner} from './operations.mjs';
 import {createLearningCapture} from './learnings.mjs';
 import { runAidlc } from './runtime.mjs';
-import { KIT_ROOT, requestBindingDigest } from './compile.mjs';
+import {loadRun} from '@kontourai/flow';
+import {checkpointRetryIdentity} from './dispatch-checkpoints.mjs';
+import {digest, KIT_ROOT, requestBindingDigest } from './compile.mjs';
+import {createControllerLock,releaseControllerLock} from './controller-lock.mjs';
 import {retainRequestAdmission} from './request-admission.mjs';
 
 export {runAidlc};
@@ -34,7 +37,7 @@ export async function executeKit({request,controllerRoot,workerRunner,signal,ope
   controllerRoot=privateController(request.workspace,controllerRoot);
   const executor=createDockerExecutor({request,controllerRoot,workerRunner,signal});
   const authority=createControllerAuthority({policy:request.parameters?.authority_policy,requestDigest:requestBindingDigest(request),controllerRoot});
-  executor.decide=async input=>{const proposal={...input,purpose:'review-disposition',request_digest:requestBindingDigest(request)};const grant=await authority.authorize(proposal);const verified=grant.authorized&&authority.verify(grant.receipt,proposal);return {authorized:verified,decision:verified?'accept':'defer',reference:grant.reference,receipt:grant.receipt,pending:grant.pending};};
+  executor.decide=async input=>{const run=await loadRun(request.run_id,controllerRoot),proposal={...input,purpose:'review-disposition',run_id:request.run_id,workspace:request.workspace,review_admission:digest(checkpointRetryIdentity(run)),request_digest:requestBindingDigest(request)};const grant=await authority.authorize(proposal);const verified=grant.authorized&&authority.verify(grant.receipt,proposal);return {authorized:verified,decision:verified?(grant.receipt.payload.disposition?.review_disposition?'request_changes':'accept'):'defer',...(verified&&grant.receipt.payload.disposition?.review_disposition?{revision:{...grant.receipt.payload.disposition.review_disposition.units.find(unit=>unit.id===input.unit),receipt:grant.receipt}}:{}),reference:grant.reference,receipt:grant.receipt,pending:grant.pending};};
   const commandRunner=createCommandRunner({workspace:request.workspace,controllerRoot,runId:request.run_id,image:request.engine_sandbox.image,ownerId:request.engine_sandbox.owner_id});
   operationProvider??=request.parameters?.operations?createCommandOperationProvider({config:request.parameters.operations,commandRunner:createOperationCommandRunner({workspace:request.workspace,controllerRoot}),controllerRoot}):undefined;
   knowledge??=createLearningCapture({controllerRoot});
@@ -77,14 +80,14 @@ export async function executeRequestFile({requestFile,controllerRoot,authFile,wo
   config.forbidden_mount_roots=[...(config.forbidden_mount_roots??[]),{kind:'controller',path:controllerRoot},...(authFile?[{kind:'credentials',path:fs.realpathSync(authFile)}]:[])];
   if(!workerRunner)({runCodexDockerWorker:workerRunner}=await import('@kontourai/flow-agents/docker-worker'));
   config.artifact_root=path.resolve(config.artifact_root??path.join(controllerRoot,'worker-receipts'));
+  const needsBroker=!config.providerProxy;if(needsBroker)config.providerProxy={model:request.execution.model};
   const lockFile=path.join(controllerRoot,'execution.lock');
-  fs.writeFileSync(lockFile,executionOwner,{flag:'wx',mode:0o600});
+  createControllerLock(controllerRoot,executionOwner,{workerCustody:'docker',requestDigest:requestBindingDigest(request),engineImage:config.image});
   let broker;
   try{
-    if(!config.providerProxy){
+    if(needsBroker){
       if(!authFile)throw new Error('Host auth file required; credentials are never mounted into workers');
       if(!brokerFactory)({startProviderProxy:brokerFactory}=await import('@kontourai/flow-agents/provider-broker'));
-      config.providerProxy={model:request.execution.model};
       const requestDigest='sha256:'+requestBindingDigest(request),admissionFile=path.join(controllerRoot,'provider-admission.json');
       const initializeLedger=!fs.existsSync(admissionFile);
       if(initializeLedger)fs.writeFileSync(admissionFile,JSON.stringify({request_digest:requestDigest})+'\n',{flag:'wx',mode:0o600});
@@ -98,7 +101,7 @@ export async function executeRequestFile({requestFile,controllerRoot,authFile,wo
     try{if(broker){
       try{fs.writeFileSync(path.join(controllerRoot,`provider-observations-${executionOwner}.json`),JSON.stringify(broker.evidence,null,2)+'\n',{flag:'wx',mode:0o600});}
       finally{await broker.close();}
-    }}finally{if(fs.readFileSync(lockFile,'utf8')!==executionOwner)throw new Error('Execution lock custody changed');fs.unlinkSync(lockFile);}
+    }}finally{releaseControllerLock(controllerRoot,executionOwner);}
   }
 }
 

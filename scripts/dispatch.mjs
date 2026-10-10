@@ -125,6 +125,7 @@ export async function dispatchStage({ stage, units, executor, context = {}, poli
     const declaredReviewBudget = bounded(stage.reviewer_max_iterations, 2, 16, 'reviewer_max_iterations');
     const reviewBudget = bounded(policy.maxReviewIterations, declaredReviewBudget, 16, 'maxReviewIterations');
     const inputRevisionBudget=bounded(policy.maxInputRevisions,4,16,'maxInputRevisions');
+    const reviewRevisionBudget=bounded(policy.maxReviewRevisions,4,16,'maxReviewRevisions');
     if (stage.reviewer !== undefined && (!nonempty(stage.reviewer) || (stage.review_class !== undefined && !['advisory', 'adversarial'].includes(stage.review_class)))) fail('invalid_review', 'Invalid reviewer declaration');
     manifest = validateUnits(units ?? stage.units ?? (stage.for_each ? null : [{ id: 'stage', depends_on: [], mutable_resources: ['stage-artifacts'] }]));
     if (context.unit && !manifest.some(unit => unit.id === context.unit)) fail('unknown_unit', 'Selected unit is not in the authoritative manifest');
@@ -132,7 +133,8 @@ export async function dispatchStage({ stage, units, executor, context = {}, poli
     const selected = context.unit ? manifest.filter(unit => unit.id === context.unit) : manifest;
     if (context.unit && selected[0].depends_on?.some(id => !context.completedUnits?.includes(id))) fail('unit_not_ready', 'Selected unit has incomplete dependencies');
     outcome.units = selected.map(unit => ({ id: unit.id, status: 'pending', receipts: [], findings: [], reviews: [], basis: null, reason: null, dissent: [] }));
-    outcome.contract_digest=hash({stage,units:selected,context,executionBudget,reviewBudget,inputRevisionBudget,requiresClaim:policy.requiresClaim===true});
+    outcome.max_review_revisions=reviewRevisionBudget;
+    outcome.contract_digest=hash({stage,units:selected,context,executionBudget,reviewBudget,inputRevisionBudget,reviewRevisionBudget,requiresClaim:policy.requiresClaim===true});
     if(resume){
       resume=structuredClone(resume);
       if(typeof executor.verifyResume!=='function'||await executor.verifyResume(structuredClone(resume))!==true)fail('unverified_resume','Retained dispatch requires host-verified observation custody');
@@ -205,6 +207,7 @@ export async function dispatchStage({ stage, units, executor, context = {}, poli
         if (policy.requiresClaim && !claim && !context.claim) fail('claim_required', 'Host did not observe canonical Flow claim admission');
         const dependencies = (unit.depends_on ?? []).map(id => ({ id, basis: records.get(id)?.basis ?? context.dependencyBasis?.[id], artifacts: records.get(id)?.artifacts ?? context.dependencyArtifacts?.[id] }));
         let unitContext = { ...(context.shared ?? {}), ...(context.units?.[unit.id] ?? {}), ...(unit.context ?? {}), dependencies };
+        if(resumingDecision&&record.before_review?.execution_context)unitContext={...unitContext,...structuredClone(record.before_review.execution_context)};
         const basisKey = hash({stage, unit, context: unitContext});
         let initialBasis = await executor.loadBasis?.(basisKey);
         if (!initialBasis) { initialBasis = await snapshot(unit, []); await executor.saveBasis?.(basisKey, initialBasis); }
@@ -213,12 +216,16 @@ export async function dispatchStage({ stage, units, executor, context = {}, poli
           if (!executor.decide) return;
           const frozen = structuredClone(basis);
           if (!isDeepStrictEqual(await snapshot(unit, artifacts), frozen)) fail('stale_decision', 'Unit source/artifact basis changed before host decision');
-          const request = { kind, stage: stage.slug, unit: unit.id, basis: frozen, continuation_phase:record.continuation?.phase??null,execution_receipts:record.receipts.map(observed=>structuredClone(observed.receipt)),review_receipts: record.reviews.map(review => structuredClone(review.receipt)), findings: structuredClone(record.findings), dissent: structuredClone(record.dissent) };
+          const request = { kind, stage: stage.slug, unit: unit.id, basis: frozen, continuation_phase:record.continuation?.phase??null,max_review_revisions:reviewRevisionBudget,review_revisions:record.review_revisions??0,execution_receipts:record.receipts.map(observed=>structuredClone(observed.receipt)),review_receipts: record.reviews.map(review => structuredClone(review.receipt)), findings: structuredClone(record.findings), dissent: structuredClone(record.dissent) };
           const decision = await executor.decide(request);
           if (controller.signal.aborted) fail('cancelled', 'Dispatch cancelled during host decision');
           if (!isDeepStrictEqual(await snapshot(unit, artifacts), frozen)) fail('stale_decision', 'Unit source/artifact basis changed during host decision');
           record.decision = { kind, basis: frozen, response: structuredClone(decision ?? null) };
           (record.decisions ??= []).push(structuredClone(record.decision));
+          if(decision?.authorized===true&&decision.decision==='request_changes'&&nonempty(decision.reference)){
+            const revision=decision.revision;if(record.continuation?.phase!=='review-decision'||kind!=='advisory_review'||!revision||revision.id!==unit.id||!Array.isArray(revision.finding_ids)||!revision.finding_ids.length||new Set(revision.finding_ids).size!==revision.finding_ids.length||revision.finding_ids.some(id=>!record.findings.some(finding=>finding.id===id&&finding.status==='open'))||!nonempty(revision.clarification)||revision.clarification.length>8192)fail('invalid_review_revision','Review request changes must bind this current unit and its open findings');
+            record.review_change_request=structuredClone({revision,reference:decision.reference});record.status='revision_requested';record.reason=null;
+          }
           if (decision?.authorized === true && decision.decision === 'accept' && nonempty(decision.reference)) {
             record.authority_reference = decision.reference;
             record.status = 'completed'; record.reason = null;
@@ -232,6 +239,16 @@ export async function dispatchStage({ stage, units, executor, context = {}, poli
           if(before!==basis.source_digest)outcome.source_publications.push({unit:unit.id,before,after:basis.source_digest,receipt_id:result.receipt.id,receipt_digest:result.receipt.digest,phase});
           for (const artifact of artifacts) if (!basis.artifacts.some(observed => observed.path === artifact.path && observed.digest === artifact.digest)) fail('artifact_mismatch', 'Reported author artifact differs from current observed bytes');
           return result;
+        }
+        async function reviseRequestedReview(){
+          const requested=record.review_change_request;if(!requested)fail('invalid_review_revision','Missing authorized revision request');record.review_revisions=(record.review_revisions??0)+1;if(record.review_revisions>reviewRevisionBudget)fail('review_revision_budget','Operator review revision budget exhausted');
+          (record.phase_authorizations??=[]).push(structuredClone(record.decision));delete record.authority_reference;delete record.continuation;delete record.review_change_request;record.status='running';record.reason=null;
+          unitContext={...unitContext,operator_review_revision:{...requested.revision,reference:requested.reference}};
+          record.review_revision_history??=[];record.review_revision_history.push({request:structuredClone(requested),prior_basis:structuredClone(basis),prior_review_receipts:record.reviews.map(review=>structuredClone(review.receipt)),revision:record.review_revisions});
+          await author('revise',stage.lead_agent,{iteration:record.review_revisions,findings:structuredClone(record.findings),context:structuredClone(unitContext),operator_authority:requested.reference});
+          record.basis=structuredClone(basis);record.artifacts=structuredClone(artifacts);record.continuation={phase:'revised-before-review',execution_context:structuredClone(unitContext)};record.status='awaiting_decision';record.reason='revision_review_required';
+          const progress=structuredClone({...outcome,status:'awaiting_decision'});for(const unit of progress.units)delete unit.resume_decision_checked;await executor.onProgress?.(progress);
+          delete record.continuation;record.status='running';record.reason=null;
         }
         function consumePhaseDecision(){(record.phase_authorizations??=[]).push(structuredClone(record.decision));delete record.authority_reference;record.status='running';record.reason=null;}
         async function continueMob(contributions,retainedDialogue){
@@ -249,13 +266,13 @@ export async function dispatchStage({ stage, units, executor, context = {}, poli
           delete record.continuation;return true;
         }
         if(resumingDecision){
-          basis=basisValid(record.basis);artifacts=structuredClone(record.artifacts);authorIdentities=record.receipts.filter(receipt=>receipt.phase!=='review').map(receipt=>receipt.identity);record.status='awaiting_decision';if(record.continuation?.phase!=='before-review')await decide(pendingReason);else{record.status='running';record.reason=null;}
+          basis=basisValid(record.basis);artifacts=structuredClone(record.artifacts);authorIdentities=record.receipts.filter(receipt=>receipt.phase!=='review').map(receipt=>receipt.identity);record.status='awaiting_decision';if(!['before-review','revised-before-review'].includes(record.continuation?.phase))await decide(pendingReason);else{record.status='running';record.reason=null;}
           if(record.status==='awaiting_decision')return;
           const continuation=record.continuation;
-          if(continuation?.phase==='review-decision'){if(pendingReason!=='advisory_review'||stage.review_class!=='advisory'||!stage.reviewer||record.reviews.length!==1||!isDeepStrictEqual(record.reviews[0].basis,basis))fail('invalid_resume','Terminal disposition lacks its declared current advisory review');delete record.continuation;return;}
-          if(continuation?.phase==='before-review'){if(!executor.beforeReview)fail('invalid_resume','Pending input checkpoint lacks its host intake port');}
+          if(continuation?.phase==='review-decision'){if(pendingReason!=='advisory_review'||stage.review_class!=='advisory'||!stage.reviewer||!record.reviews.length||!isDeepStrictEqual(record.reviews.at(-1).basis,basis))fail('invalid_resume','Disposition lacks its declared current advisory review');if(record.status==='revision_requested')await reviseRequestedReview();else{delete record.continuation;return;}}
+          if(continuation?.phase==='revised-before-review'){unitContext=structuredClone(continuation.execution_context);delete record.continuation;}else if(continuation?.phase==='review-decision'){}else if(continuation?.phase==='before-review'){if(!executor.beforeReview)fail('invalid_resume','Pending input checkpoint lacks its host intake port');}
           else if(stage.mode!=='mob'||pendingReason!=='mob_judgment'||!['mob-contribution-decision','mob-dialogue-decision'].includes(continuation?.phase))fail('invalid_resume','Unknown pending dispatch continuation');
-          if(continuation?.phase!=='before-review'){consumePhaseDecision();if(!await continueMob(continuation.contributions,continuation.dialogue))return;}
+          if(!['before-review','review-decision','revised-before-review'].includes(continuation?.phase)){consumePhaseDecision();if(!await continueMob(continuation.contributions,continuation.dialogue))return;}
         }
         let draft;
         if(!resumingDecision){
@@ -286,6 +303,7 @@ export async function dispatchStage({ stage, units, executor, context = {}, poli
           }
         }
         }
+        while(true){
         if(executor.beforeReview){
           if(unitContext.operator_questionnaire_reply)record.initial_questionnaire_reply=structuredClone(unitContext.operator_questionnaire_reply);if(unitContext.operator_questionnaire_receipt){record.initial_questionnaire_receipt=structuredClone(unitContext.operator_questionnaire_receipt);record.initial_questionnaire_subject=structuredClone(unitContext.operator_questionnaire_subject);}
           while(true){
@@ -307,16 +325,18 @@ export async function dispatchStage({ stage, units, executor, context = {}, poli
         if ((stage.produces?.length ?? 0) && !artifacts.length) fail('missing_artifacts', 'Stage produced no observed output artifacts');
         if (stage.reviewer) {
           const limit = stage.review_class === 'advisory' ? 1 : Math.min(reviewBudget, declaredReviewBudget);
-          for (let iteration = 1; iteration <= limit; iteration++) {
+          for (let localIteration = 1; localIteration <= limit; localIteration++) {
+            const iteration=record.reviews.length+1;if(iteration>(stage.review_class==='advisory'?1+reviewRevisionBudget:reviewBudget))fail('review_budget','Cumulative observed review budget exhausted');
             const frozen = structuredClone(basis);
             const review = await execute(request('review', stage.reviewer, { iteration, basis: frozen, reviewed_artifacts: artifacts, output_scope: 'review-only' }), record);
+            if(record.reviews.some(previous=>previous.identity.instance_id===review.identity.instance_id))fail('reviewer_not_independent','Reviewer reuses a previous observed review instance');
             if (authorIdentities.some(identity => actorKey(identity) === actorKey(review.identity) || identity.instance_id === review.identity.instance_id)) fail('reviewer_not_independent', 'Reviewer shares an author execution principal or instance');
             if (!isDeepStrictEqual(review.basis, frozen) || !isDeepStrictEqual(await snapshot(unit, artifacts), frozen)) fail('stale_review', 'Reviewed source/artifact basis changed during review');
             record.findings = await reviewFindings(review, record.findings, executor.authorizeFinding ? finding => executor.authorizeFinding({stage: stage.slug, unit: unit.id, finding, basis: frozen, review_receipt: review.receipt, reviewer_identity: review.identity}) : null);
             record.reviews.push({ iteration, verdict: review.verdict, identity: review.identity, receipt: review.receipt, basis: frozen, findings: structuredClone(record.findings) });
             if (stage.review_class === 'advisory') { record.continuation={phase:'review-decision'};record.status = 'awaiting_decision'; record.reason = 'advisory_review'; break; }
             if (review.verdict === 'ready') break;
-            if (iteration === limit) fail('review_budget', 'Review remains not ready at the iteration limit');
+            if (localIteration === limit) fail('review_budget', 'Review remains not ready at the iteration limit');
             await author('revise', stage.lead_agent, { iteration, findings: record.findings });
           }
         }
@@ -325,7 +345,9 @@ export async function dispatchStage({ stage, units, executor, context = {}, poli
         record.basis = basis; record.artifacts = artifacts;
         if (record.status === 'completed' && record.authority_reference && !isDeepStrictEqual(record.decisions.findLast(decision => decision.response?.reference === record.authority_reference)?.basis, basis)) fail('stale_decision', 'Accepted host decision no longer binds the final unit basis');
         if (record.status === 'awaiting_decision'){record.resume_decision_checked=true;await decide(record.reason);}
+        if(record.status==='revision_requested'){await reviseRequestedReview();continue;}
         if (record.status === 'running') record.status = 'completed';
+        break;}
       } catch (error) { record.status = error.code === 'cancelled' ? 'cancelled' : 'blocked'; record.reason = error.code ?? 'executor_error'; record.error = error.message; }
       finally {
         if (claim) { try { await executor.release?.(claim, structuredClone(record)); } catch (error) { record.status = 'blocked'; record.reason = 'claim_release_failed'; record.error = error.message; } }

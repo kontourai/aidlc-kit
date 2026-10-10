@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { digest, readSnapshot } from './compile.mjs';
 import { readArtifact } from './artifacts.mjs';
+import {validateReviewDisposition,validateReviewVisit} from './review-dispositions.mjs';
 import {intakeQuestionnaireReply,materializeQuestionnaireReply,validateQuestionnaireVisit} from './questionnaire-replies.mjs';
 
 
@@ -67,13 +68,17 @@ export function createControllerAuthority({policy,requestDigest,controllerRoot})
     verify(receipt,input){return !!receipt&&issued.has(receipt.payload?.id)&&receipt.payload.request_digest===requestDigest&&receipt.payload.input_digest===decisionBindingDigest(input)&&verify(null,Buffer.from(JSON.stringify(receipt.payload)),publicKey,Buffer.from(receipt.signature,'base64'));},
 authorizeFinding:async()=>({authorized:false,reason:'finding_requires_specific_owner_disposition'})};
   const policyAuthorize=port.authorize;
-  port.authorize=async input=>{
+  port.lookupDecision=input=>{
     if(input.request_digest!==requestDigest)return {authorized:false,reason:'request_binding_mismatch'};
     const decisions=[...issued.values()].filter(receipt=>receipt.payload.kind==='controller-decision'&&receipt.payload.input_digest===decisionBindingDigest(input)&&receipt.payload.request_digest===requestDigest);
     const denied=decisions.find(receipt=>receipt.payload.decision==='deny');
     if(denied)return {authorized:false,reason:'explicit_operator_denial',reference:`controller-decision:${denied.payload.id}`,decision_kind:'host-observed-operator-interaction',receipt:denied};
     const accepted=decisions.find(receipt=>receipt.payload.decision!=='deny');
     if(accepted)return {authorized:true,reference:`controller-decision:${accepted.payload.id}`,decision_kind:'host-observed-operator-interaction',receipt:accepted};
+    return {authorized:false,reason:'current_operator_decision_absent'};
+  };
+  port.authorize=async input=>{
+    const observed=port.lookupDecision(input);if(observed.receipt||observed.reason==='request_binding_mismatch')return observed;
     const response=input.questionnaire?{authorized:false,reason:'questionnaire_requires_exact_operator_reply'}:input.purpose==='live-recomposition'?{authorized:false,reason:'live_recomposition_requires_operator_interaction'}:await policyAuthorize(input);if(response.authorized)return response;
     if(!DECISION_PURPOSES.includes(input.purpose))return response;
     const pendingRoot=path.join(authorityRoot,'pending');fs.mkdirSync(pendingRoot,{recursive:true,mode:0o700});
@@ -97,7 +102,7 @@ export function decisionBindingDigest(input){
 const DECISION_PURPOSES=['live-recomposition','profile-composition','stage-selection','source-change','summary-confirmation','input-confirmation','code-plan','construction-verification-command','construction-checkpoint','skeleton-checkpoint','review-disposition','deployment','operation'];
 /** Trusted CLI interaction. This observes an operator action, not a human signature. */
 const questionnaireAdmissions=new WeakSet();
-export async function recordControllerInteraction(args){const pending=JSON.parse(fs.readFileSync(args.pendingFile,'utf8')),input=pending.payload?.input;if(input?.questionnaire)await validateQuestionnaireVisit({input,controllerRoot:args.controllerRoot});const admission={};questionnaireAdmissions.add(admission);try{return recordControllerDecision({...args,questionnaireAdmission:admission});}finally{questionnaireAdmissions.delete(admission);}}
+export async function recordControllerInteraction(args){const pending=JSON.parse(fs.readFileSync(args.pendingFile,'utf8')),input=pending.payload?.input;if(input?.questionnaire)await validateQuestionnaireVisit({input,controllerRoot:args.controllerRoot});if(args.disposition?.review_disposition)await validateReviewVisit({input,controllerRoot:args.controllerRoot,disposition:args.disposition});const admission={};questionnaireAdmissions.add(admission);try{return recordControllerDecision({...args,questionnaireAdmission:admission});}finally{questionnaireAdmissions.delete(admission);}}
 export function recordControllerDecision({controllerRoot,pendingFile,reference,decision='approve',disposition,questionnaireAdmission}) {
   if(typeof reference!=='string'||!reference.trim()||reference.length>2048||!['approve','deny'].includes(decision))throw new Error('Explicit decision and reference required');
   const root=fs.realpathSync(controllerRoot),authorityRoot=path.join(root,'authority'),file=fs.realpathSync(pendingFile),pendingRoot=fs.realpathSync(path.join(authorityRoot,'pending'));
@@ -106,10 +111,12 @@ export function recordControllerDecision({controllerRoot,pendingFile,reference,d
   const fingerprint=createHash('sha256').update(publicKey.export({type:'spki',format:'der'})).digest('hex'),pending=JSON.parse(fs.readFileSync(file,'utf8')),input=pending.payload?.input;
   if(pending.payload?.kind!=='decision-pending'||pending.payload.issuer!==fingerprint||!input||pending.payload.input_digest!==decisionBindingDigest(input)||pending.payload.id!==decisionBindingDigest(input)||path.basename(file)!==`${decisionBindingDigest(input)}.json`||pending.payload.request_digest!==input.request_digest||!DECISION_PURPOSES.includes(input.purpose)||!verify(null,Buffer.from(JSON.stringify(pending.payload)),publicKey,Buffer.from(pending.signature??'','base64')))throw new Error('Pending decision signature or exact binding invalid');
   const bindingFile=path.join(root,'binding.json');if(fs.existsSync(bindingFile)&&JSON.parse(fs.readFileSync(bindingFile,'utf8')).request_digest!==input.request_digest)throw new Error('Pending decision request is stale');
+  const revision=validateReviewDisposition(input,disposition);
+  if(revision&&!questionnaireAdmissions.has(questionnaireAdmission))throw new Error('Review revisions require the ordinary current-visit CLI interaction');
   const dissent=[...(input.dissent??[]),...(input.decision?.units?.flatMap(unit=>unit.dissent??[])??[])];
   const findings=input.findings??input.decision?.units?.flatMap(unit=>unit.findings??[])??[];
-  if(decision==='approve'&&dissent.some(objection=>objection.kind==='judgment')&&disposition?.accept_judgment_dissent!==true)throw new Error('Judgment dissent requires explicit operator disposition');
-  if(decision==='approve'&&findings.some(finding=>finding.status==='open'&&!disposition?.accepted_finding_ids?.includes(finding.id)))throw new Error('Open findings require explicit operator disposition by id');
+  if(decision==='approve'&&!revision&&dissent.some(objection=>objection.kind==='judgment')&&disposition?.accept_judgment_dissent!==true)throw new Error('Judgment dissent requires explicit operator disposition');
+  if(decision==='approve'&&!revision&&findings.some(finding=>finding.status==='open'&&!disposition?.accepted_finding_ids?.includes(finding.id)))throw new Error('Open findings require explicit operator disposition by id');
   if(input.questionnaire&&!questionnaireAdmissions.has(questionnaireAdmission))throw new Error('Questionnaire decisions require the ordinary current-visit CLI interaction');
   if(decision==='approve'&&input.questionnaire)disposition=intakeQuestionnaireReply({input,disposition});
   const payload={version:'1.0',id:randomUUID(),kind:'controller-decision',issuer:fingerprint,reference,decision,decision_kind:'host-observed-operator-interaction',request_digest:input.request_digest,purpose:input.purpose,stage:input.stage,input_digest:decisionBindingDigest(input),disposition:disposition??null,issued_at:new Date().toISOString()};
@@ -136,6 +143,7 @@ export function buildExecutionPrompt({dispatch,workspace,sourceDigest}){
       'In artifacts, report your assigned stage output paths. You may also identify actual application-source paths you created, modified, deleted, or read and unchanged supplied input paths; the host classifies these as source observations or references, not new stage outputs. This does not authorize changing input documents or files outside your source scope. Do not report unrelated artifact/control paths.',
       'For reviews, verdict "ready" requires no open findings of any severity, including info. Any unresolved finding requires "not_ready". Put factual, non-actionable observations in summary; do not mark uncertainty fixed or omit an actionable concern to obtain a ready verdict.',
       'The host supplies a source snapshot, not the canonical repository or its Git history. Read-only review snapshots have no .git directory, and canonical controller state is not present. Choose checks applicable to the supplied files. If a Git-dependent or other required check is unavailable, report that limit truthfully rather than claiming it ran or passed. An unresolved verification requirement remains a finding and requires a not_ready review.',
+      context.operator_review_revision?`Actual signed operator request for changes: ${JSON.stringify(context.operator_review_revision)}. Resolve the referenced current findings and clarification within the existing source/artifact authority. Preserve finding IDs and do not treat requested revision as review acceptance.`:'',
       'Reference prior findings by their unchanged ids. A review covers the frozen source and artifact basis. Do not weaken tests or declared quality targets to obtain a pass.',
       'Native generated metadata is adapted to this controller. If traceability.json is a required output, supply a candidate mapping {stage, unit (only for a real unit), upstream_ids:[actual IDs], coverage:[{id,status:"OK"|"GAP"|"ORPHAN"|"Deferred"|"N/A",target}], reverse:[{id,status,target}]}. Read actual upstream IDs and existing implementation targets; never invent IDs or claim the mapping proves semantic correctness. The host sensor validates this candidate instead of running native engine commands.',
       context.approved_summary_basis?'Summary question bytes have current-basis operator confirmation; consume them and preserve those exact bytes.':'Do not claim unconfirmed summary assumptions are approved.',

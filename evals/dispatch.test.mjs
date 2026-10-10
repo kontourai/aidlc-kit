@@ -251,3 +251,9 @@ test('mob judgment continuations retain producers and run dialogue integration a
   assert.equal(port.events.filter(event=>event.kind==='start'&&event.phase==='integrate').length,mode==='first-judgment'?1:2);assert.equal(port.events.filter(event=>event.kind==='start'&&event.phase==='dialogue').length,mode==='first-judgment'?0:1);
  }
 });
+
+test('trusted revision admission still cannot exceed original operator budget',async t=>{
+ const port=processPort(t,{adjust(request,result){if(request.phase==='review')Object.assign(result,{verdict:'not_ready',findings:[{id:'F1',severity:'medium',status:'open',reason:'Current correction still required'}]});}}),contract=stage({reviewer:'reviewer',review_class:'advisory'}),policy={maxReviewRevisions:1};
+ port.decide=async input=>({authorized:true,decision:'request_changes',reference:'test-host-current-revision',revision:{id:input.unit,finding_ids:['F1'],clarification:'Correct the current finding.'}});
+ const result=await dispatchStage({stage:contract,executor:port,policy});assert.equal(result.status,'blocked');assert.equal(result.reason,'review_revision_budget');assert.equal(port.events.filter(event=>event.kind==='start'&&event.phase==='revise').length,1);assert.equal(result.units[0].reviews.length,2);
+});

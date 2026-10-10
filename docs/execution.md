@@ -122,3 +122,7 @@ When an admitted later unit publishes source, its host-observed before/after sou
 Mob judgment waits retain the exact continuation phase and execution receipts. Accepting a contribution or dialogue objection resumes the remaining dialogue/integration and the declared reviewer; it never substitutes for hard review or a later advisory disposition. Previously executed authors and collaborators retain their identities and receipts.
 
 Actual questionnaire answers, Edit File replies, and mandatory pre-review intent assumption decisions use the existing signed operator inbox. See [questionnaire-replies.md](questionnaire-replies.md) for the exact response contract and bounded follow-up cycle.
+
+Advisory review corrections use the ordinary signed `decide --disposition` path; see [review-revisions.md](review-revisions.md) for bounded author revision, fresh review and explicit controller recovery.
+
+Construction uses stage-level artifacts when the approved effective plan omits Units Generation and that producer has never completed. This matches the pinned AWS `usesStageLevelPerUnitArtifacts` rule, including stock POC and infra profiles with skeleton enabled. Such a plan uses ordinary stage Flow gates rather than a fabricated Unit DAG or unit-major skeleton walk. A selected or previously completed Units producer still requires its current approved DAG, even after recomposition skips the producer or invalidates its artifacts.
