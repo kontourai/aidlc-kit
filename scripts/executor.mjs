@@ -58,7 +58,7 @@ export function createDockerExecutor({request,controllerRoot,workerRunner,signal
     async execute(dispatch){
       budget();const identity=admitted.get(dispatch.request_digest);if(!identity||JSON.stringify(identity)!==JSON.stringify(dispatch.expected_identity))throw new Error('Worker lacks host admission');
       if(history.starts.some(attempt=>attempt.request_digest===dispatch.request_digest))throw new Error('Prior worker execution requires durable receipt replay; automatic retry is forbidden');
-      const attempt={request_digest:dispatch.request_digest,invocation_id:identity.instance_id,started_at:Date.now(),status:'started'};history.starts.push(attempt);turns++;persistHistory();
+      const attempt={execution_owner:config.owner_id,engine_image:config.image,request_digest:dispatch.request_digest,invocation_id:identity.instance_id,started_at:Date.now(),status:'started'};history.starts.push(attempt);turns++;persistHistory();
       const fork=path.join(workerRoot,identity.instance_id);fs.mkdirSync(fork,{recursive:false,mode:0o700});
       // Source files and authorized input artifacts only. No sibling raw contributions,
       // controller state, grader, source credentials, or canonical Flow state is copied.

@@ -20,6 +20,7 @@ import {boundDefinition} from './definition.mjs';
 import {verifyRecompositionLedger,pendingRecomposition,childExecutionSnapshot} from './recomposition.mjs';
 import {withControllerLock} from './controller-lock.mjs';
 import {retainedQuestionnaire,questionnaireSubject,materializeQuestionnaireReply,questionnaireOverlayBasis} from './questionnaire-replies.mjs';
+import {unitReviewInput} from './review-dispositions.mjs';
 import {verifyControllerCheckpoint} from './authority.mjs';
 import {createIntentInputCheckpoint} from './intent-inputs.mjs';
 import {retainedDispatch,checkpointRetryIdentity,checkpointContextBinding,loadRetainedDispatch,saveRetainedDispatch} from './dispatch-checkpoints.mjs';
@@ -91,7 +92,7 @@ export function restoreUnits(workspace,records){
 
 /** Complete lifecycle conductor. Flow's persisted cursor remains the authority. */
 export async function runAidlc(options){
- return withControllerLock(options.controllerRoot,()=>runAidlcUnlocked(options),{inheritedOwner:options.controllerExecutionOwner});
+ return withControllerLock(options.controllerRoot,()=>runAidlcUnlocked(options),{inheritedOwner:options.controllerExecutionOwner,workerCustody:options.controllerWorkerCustody});
 }
 
 async function runAidlcUnlocked({request,executor,commandRunner,authority,controllerRoot,signal,executionSlice,operationProvider,knowledge}){
@@ -219,6 +220,10 @@ async function runAidlcUnlocked({request,executor,commandRunner,authority,contro
     const reviewFile=path.join(controllerRoot,'review-checkpoints',`${stageId}.json`);
     if(fs.existsSync(reviewFile)){const stored=json(reviewFile);if(!verifyControllerCheckpoint({controllerRoot,checkpoint:stored.checkpoint,envelope:stored.envelope}))throw new Error('Retained review checkpoint changed');const original=questionnaireOverlayBasis({controllerRoot,checkpoint:stored.checkpoint,basis:reviewCurrent,authority});if(original){reviewCurrent=original;operatorDerived=true;}}
     const retainedReview=stage.phase==='initialization'?null:loadRetainedDispatch({controllerRoot,kind:'review',stage:stageId,binding:reviewBinding(),admission:checkpointRetryIdentity(run),basis:reviewCurrent});
+    if(!retainedReview&&fs.existsSync(reviewFile)){
+      const saved=json(reviewFile).checkpoint,subjects=[{purpose:'review-disposition',run_id:request.run_id,workspace,review_admission:digest(checkpointRetryIdentity(run)),stage:stageId,decision:saved.prepared,request_digest:binding.request_digest},...saved.prepared.units.filter(record=>record.status==='awaiting_decision').map(record=>unitReviewInput({record,stage:stageId,run_id:request.run_id,workspace,review_admission:digest(checkpointRetryIdentity(run)),request_digest:binding.request_digest,max_review_revisions:saved.prepared.max_review_revisions}))];
+      for(const subject of subjects){const grant=await authority?.authorize?.(subject);if(grant?.authorized&&grant.receipt.payload.disposition?.review_disposition&&authority.verify(grant.receipt,subject))throw new Error('Authorized review revision changed basis before a durable progress checkpoint; automatic replay refused');}
+    }
     if(retainedReview&&operatorDerived)for(const record of retainedReview.prepared.units){if(record.continuation?.phase!=='before-review')continue;const old=structuredClone({basis:record.basis,artifacts:record.artifacts});record.operator_input_derivations??=[];record.operator_input_derivations.push({original:old,input:record.before_review.input});record.artifacts=record.artifacts.map(ref=>({...ref,digest:readArtifact(workspace,ref.path).digest}));record.basis={...record.basis,artifacts:record.basis.artifacts.map(ref=>({...ref,digest:readArtifact(workspace,ref.path).digest}))};}
 
     if(retainedReview)context=retainedReview.context;
@@ -300,7 +305,7 @@ async function runAidlcUnlocked({request,executor,commandRunner,authority,contro
       }
       let unitFlow,inputReplayed=Boolean(retainedReview);
       try{
-        let stageExecutor={...executor,beforeReview:createIntentInputCheckpoint({request,controllerRoot,authority,settings,requestDigest:binding.request_digest,admission:checkpointRetryIdentity(run)}),async execute(dispatch){return executor.execute({...dispatch,beforePublication:async()=>{await dispatch.beforePublication?.();assertTestingPolicyCurrent(testing,testingInput);}});}};
+        let stageExecutor={...executor,async onProgress(observed){saveRetainedDispatch({controllerRoot,kind:'review',stage:stageId,binding:reviewBinding(),admission:checkpointRetryIdentity(run),basis:reviewBasis(),dispatch:observed,context});await executor.onProgress?.(observed);},beforeReview:createIntentInputCheckpoint({request,controllerRoot,authority,settings,requestDigest:binding.request_digest,admission:checkpointRetryIdentity(run)}),async execute(dispatch){return executor.execute({...dispatch,beforePublication:async()=>{await dispatch.beforePublication?.();assertTestingPolicyCurrent(testing,testingInput);}});}};
         if(stage.for_each){unitFlow=await createUnitFlow({controllerRoot,parentRunId:request.run_id,stage,units,snapshotBasis:executor.snapshotBasis});stageExecutor=unitFlow.bindExecutor(stageExecutor);}
         const historicalFile=unitFlow?path.join(controllerRoot,'unit-dispatch',`${unitFlow.runId}.json`):null;
         const executeStage=async()=>{
@@ -317,26 +322,29 @@ async function runAidlcUnlocked({request,executor,commandRunner,authority,contro
         else if(stageId==='intent-capture'){
           const retained=await retainedDispatch({controllerRoot,kind:'input',stage:stageId,binding:{request_digest:binding.request_digest,stage,context:checkpointContextBinding(context),source_digest:snapshotWorkspace(workspace).source_digest},admission:checkpointRetryIdentity(run),observeBasis:()=>currentRefs(workspace,artifacts),execute:executeStage});dispatched=retained.dispatch;inputReplayed=retained.replayed;
         }else dispatched=await executeStage();
-        if(retainedReview?.prepared.units.some(record=>record.continuation?.phase==='before-review')){
+        if(retainedReview?.prepared.units.some(record=>['before-review','revised-before-review'].includes(record.continuation?.phase))){
           const prior=structuredClone(dispatched);dispatched=await dispatchStage({stage,units:stage.for_each?units:undefined,executor:{...stageExecutor,verifyResume:observed=>digest(observed)===digest(prior)},context,policy:{...request.parameters?.dispatch_policy,...(unitFlow?{requiresClaim:true}:{})},signal,resume:prior});
         }
         if(dispatched.status==='awaiting_decision'&&dispatched.units.some(record=>record.continuation?.phase==='before-review')){
           saveRetainedDispatch({controllerRoot,kind:'review',stage:stageId,binding:reviewBinding(),admission:checkpointRetryIdentity(run),basis:reviewBasis(),dispatch:dispatched,context});dispatched.pending=dispatched.units.find(record=>record.continuation?.phase==='before-review')?.before_review?.pending??null;
         }else if(dispatched.status==='awaiting_decision'){
           saveRetainedDispatch({controllerRoot,kind:'review',stage:stageId,binding:reviewBinding(),admission:checkpointRetryIdentity(run),basis:reviewBasis(),dispatch:dispatched,context});
-          const input={purpose:'review-disposition',stage:stageId,decision:dispatched,request_digest:binding.request_digest};const grant=await authority?.authorize?.(input);
-          if(grant?.authorized&&authority.verify?.(grant.receipt,input)===true){
-            const prior=structuredClone(dispatched),approved=new Map(prior.units.filter(record=>record.status==='awaiting_decision').map(record=>[record.id,record]));
+          const input={purpose:'review-disposition',run_id:request.run_id,workspace,review_admission:digest(checkpointRetryIdentity(run)),stage:stageId,decision:dispatched,request_digest:binding.request_digest};const grant=await authority?.authorize?.(input);
+          const aggregateVerified=grant?.authorized&&authority.verify?.(grant.receipt,input)===true,unitGrants=new Map();
+          if(authority)for(const record of dispatched.units.filter(record=>record.status==='awaiting_decision')){const subject=unitReviewInput({record,stage:stageId,run_id:request.run_id,workspace,review_admission:digest(checkpointRetryIdentity(run)),request_digest:binding.request_digest,max_review_revisions:dispatched.max_review_revisions}),observed=authority.lookupDecision?authority.lookupDecision(subject):await authority.authorize(subject);if(observed.receipt&&authority.verify(observed.receipt,subject))unitGrants.set(record.id,observed);}
+          const aggregateDenied=grant?.reason==='explicit_operator_denial'&&authority.verify?.(grant.receipt,input)===true,hasCurrentGrant=!aggregateDenied&&dispatched.units.some(record=>record.status==='awaiting_decision'&&unitGrants.get(record.id)?.reason!=='explicit_operator_denial'&&(aggregateVerified||unitGrants.get(record.id)?.authorized));
+          if(hasCurrentGrant){
+            const prior=structuredClone(dispatched);for(const record of prior.units)if(unitGrants.get(record.id)?.reason==='explicit_operator_denial')record.resume_decision_checked=true;const approved=new Map(prior.units.filter(record=>record.status==='awaiting_decision').map(record=>[record.id,record]));
             const resumedExecutor={...stageExecutor,verifyResume:observed=>digest(observed)===digest(prior),async decide(decision){
               const record=approved.get(decision.unit);
               if(!record||decision.continuation_phase!==(record.continuation?.phase??null)||digest(decision.execution_receipts)!==digest(record.receipts.map(observed=>observed.receipt))||digest(decision.basis)!==digest(record.basis)||digest(decision.review_receipts)!==digest(record.reviews.map(review=>review.receipt))||digest(decision.findings)!==digest(record.findings)||digest(decision.dissent)!==digest(record.dissent))return {authorized:false,reason:'new_unit_requires_current_disposition'};
-              return {authorized:true,decision:'accept',reference:grant.reference};
+              const unitGrant=unitGrants.get(decision.unit);if((grant?.reason==='explicit_operator_denial'&&authority.verify(grant.receipt,input))||unitGrant?.reason==='explicit_operator_denial')return {authorized:false,reason:'explicit_operator_denial'};const scoped=aggregateVerified?grant:unitGrant;if(!scoped?.authorized)return {authorized:false,reason:'unit_without_current_disposition'};const revision=scoped.receipt.payload.disposition?.review_disposition?.units.find(unit=>unit.id===decision.unit);if(scoped.receipt.payload.disposition?.review_disposition&&!revision)return {authorized:false,reason:'unit_outside_revision_disposition'};return {authorized:true,decision:revision?'request_changes':'accept',reference:scoped.reference,...(revision?{revision:{...revision,receipt:scoped.receipt}}:{})};
             }};
             dispatched=await dispatchStage({stage,units:stage.for_each?units:undefined,executor:resumedExecutor,context,policy:{...request.parameters?.dispatch_policy,...(unitFlow?{requiresClaim:true}:{})},signal,resume:prior});
             if(!inputReplayed)executions.push(...prior.units.flatMap(record=>record.receipts));const priorReceipts=new Set(prior.units.flatMap(record=>record.receipts.map(receipt=>receipt.receipt.id)));executions.push(...dispatched.units.flatMap(record=>record.receipts.filter(receipt=>!priorReceipts.has(receipt.receipt.id))));inputReplayed=true;
             if(dispatched.status==='awaiting_decision'){
               saveRetainedDispatch({controllerRoot,kind:'review',stage:stageId,binding:reviewBinding(),admission:checkpointRetryIdentity(run),basis:reviewBasis(),dispatch:dispatched,context});
-              const nextInput={purpose:'review-disposition',stage:stageId,decision:dispatched,request_digest:binding.request_digest},next=await authority?.authorize?.(nextInput);dispatched.pending=next?.pending??null;
+              const nextInput={purpose:'review-disposition',run_id:request.run_id,workspace,review_admission:digest(checkpointRetryIdentity(run)),stage:stageId,decision:dispatched,request_digest:binding.request_digest},next=await authority?.authorize?.(nextInput);dispatched.pending=next?.pending??null;
             }
           }else dispatched.pending=dispatched.units.flatMap(unit=>unit.decisions??[]).findLast(decision=>decision.response?.pending)?.response.pending??grant?.pending??null;
         }
@@ -350,7 +358,7 @@ async function runAidlcUnlocked({request,executor,commandRunner,authority,contro
         }
       }catch(error){failure={stage:stageId,reason:error.code==='execution_budget'||error.code==='storage_budget'?'budget_exhausted':'execution_failed',detail:{message:error.message,code:error.code??null}};await refuse(stageId,failure);break;}finally{await unitFlow?.close();}
       if(!inputReplayed)executions.push(...dispatched.units.flatMap(u=>u.receipts??[]));executions.push(...(dispatched.final_verification?.dispatch?.units??[]).flatMap(u=>u.receipts??[]));
-      if(dispatched.status!=='completed'){failure={stage:stageId,reason:dispatched.reason==='execution_budget'||dispatched.reason==='storage_budget'?'budget_exhausted':dispatched.reason??dispatched.status,detail:dispatched};await refuse(stageId,failure);break;}
+      if(dispatched.status!=='completed'){failure={stage:stageId,reason:dispatched.reason==='execution_budget'||dispatched.reason==='storage_budget'||dispatched.reason==='review_revision_budget'?'budget_exhausted':dispatched.reason??dispatched.status,detail:dispatched};await refuse(stageId,failure);break;}
       if(context.shared.approved_summary_basis?.some(ref=>readArtifact(workspace,ref.path).digest!==ref.digest&&!dispatched.units.some(record=>{const derived=record.before_review?.host_derivation;let expected=ref.digest;for(const entry of record.input_transform_history??[]){const derivation=entry.host_derivation;if(derivation&&verifyControllerCheckpoint({controllerRoot,checkpoint:derivation.checkpoint,envelope:derivation.envelope})&&derivation.checkpoint.original.path===ref.path&&derivation.checkpoint.original.digest===expected)expected=derivation.checkpoint.derived.digest;if(entry.operator_receipt&&entry.input&&authority.verify(entry.operator_receipt,entry.input))for(const doc of entry.operator_reply?.documents??[])if(doc.path===ref.path&&doc.original_digest===expected)expected=doc.reply_digest;}return expected===readArtifact(workspace,ref.path).digest;}))){failure={stage:stageId,reason:'approved_summary_changed'};await refuse(stageId,failure);break;}
       assertTestingPolicyCurrent(testing,testingInput);
       if(context.shared.approved_plan_basis?.some(ref=>readArtifact(workspace,ref.path).digest!==ref.digest)){failure={stage:stageId,reason:'approved_plan_changed'};await refuse(stageId,failure);break;}

@@ -122,3 +122,5 @@ When an admitted later unit publishes source, its host-observed before/after sou
 Mob judgment waits retain the exact continuation phase and execution receipts. Accepting a contribution or dialogue objection resumes the remaining dialogue/integration and the declared reviewer; it never substitutes for hard review or a later advisory disposition. Previously executed authors and collaborators retain their identities and receipts.
 
 Actual questionnaire answers, Edit File replies, and mandatory pre-review intent assumption decisions use the existing signed operator inbox. See [questionnaire-replies.md](questionnaire-replies.md) for the exact response contract and bounded follow-up cycle.
+
+Advisory review corrections use the ordinary signed `decide --disposition` path; see [review-revisions.md](review-revisions.md) for bounded author revision, fresh review and explicit controller recovery.
