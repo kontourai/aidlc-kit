@@ -74,7 +74,7 @@ function treeBasis(root){
  function visit(file,relative){const stat=fs.lstatSync(file);must(!stat.isSymbolicLink(),'Recomposition control basis contains symlink');if(stat.isDirectory()){for(const name of fs.readdirSync(file).sort())visit(path.join(file,name),relative?relative+'/'+name:name);}else{must(stat.isFile()&&stat.size<=16*1024*1024&&files.length<10000,'Recomposition control basis exceeds budget');files.push({path:relative,digest:digest(fs.readFileSync(file))});}}
  visit(root,'');return digest(files);
 }
-async function assertQuiescent(controllerRoot,run){
+export async function assertQuiescent(controllerRoot,run){
  must(run.state.status==='active','Live recomposition requires a running nonterminal Flow');
  must(!(run.state.multi_cursor?.active_claims??[]).length,'Live recomposition refuses active claims');
  const containers=[];

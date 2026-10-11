@@ -22,6 +22,7 @@ import {withControllerLock} from './controller-lock.mjs';
 import {retainedQuestionnaire,questionnaireSubject,materializeQuestionnaireReply,questionnaireOverlayBasis} from './questionnaire-replies.mjs';
 import {unitReviewInput} from './review-dispositions.mjs';
 import {verifyControllerCheckpoint} from './authority.mjs';
+import {assertInputRevisionLedger,pendingInputRevision,inputRevisionContext} from './input-revisions.mjs';
 import {createIntentInputCheckpoint} from './intent-inputs.mjs';
 import {retainedDispatch,checkpointRetryIdentity,checkpointContextBinding,loadRetainedDispatch,saveRetainedDispatch} from './dispatch-checkpoints.mjs';
 
@@ -59,6 +60,8 @@ export async function attachObservation({controllerRoot,runId,stage,kind='comple
   const evidence=await attachEvidence(runId,{cwd:controllerRoot,gate:`${stage}-gate`,file,kind:'trust.bundle',...(supersede?{supersede}:{}),producer:'aidlc-runtime'});
   return {evidence_id:evidence.id,file,record_file:recordFile,record_digest:digest(record),status:report.claims?.[0]?.status??null};
 }
+
+export async function refreshAndPersistArtifactValidity(options){const result=await refreshArtifactValidity(options);write(path.join(options.controllerRoot,'stage-records.json'),options.records);return result;}
 
 export async function refreshArtifactValidity({controllerRoot,runId,workspace,records}){
   const observations=records.filter(record=>record.artifact_observation);
@@ -134,6 +137,9 @@ async function runAidlcUnlocked({request,executor,commandRunner,authority,contro
   if(fs.existsSync(bindingFile)){if(JSON.stringify(json(bindingFile))!==JSON.stringify(binding))throw new Error('Resume input or definition changed');}
   else{write(bindingFile,binding);const definitionFile=path.join(controllerRoot,'definition.json');write(definitionFile,flow);await startRun(definitionFile,{cwd:controllerRoot,runId:request.run_id,params:{subject:request.run_id}});}
   if(!executionSlice){
+    assertInputRevisionLedger({controllerRoot,request});
+    const revisionPending=await pendingInputRevision({controllerRoot,request,authority});
+    if(revisionPending)return {status:'waiting',run_id:request.run_id,records:fs.existsSync(path.join(controllerRoot,'stage-records.json'))?json(path.join(controllerRoot,'stage-records.json')):[],executions:[],failure:{reason:'awaiting_decision',stage:'input-revision',pending:revisionPending}};
     const effective=await verifyRecompositionLedger({request,controllerRoot,authority});
     const pending=pendingRecomposition({request,controllerRoot,authority,run:effective.run});
     if(pending)return {schema_version:'1.0',run_id:request.run_id,profile,ceremony:settings,definition_digest:effective.definition_digest,status:'waiting',failure:{reason:'awaiting_decision',stage:'live-recomposition',pending},records:fs.existsSync(path.join(controllerRoot,'stage-records.json'))?json(path.join(controllerRoot,'stage-records.json')):[],executions:[],canonical_state:effective.run.state,semantic_quality:'not_verified'};
@@ -141,6 +147,7 @@ async function runAidlcUnlocked({request,executor,commandRunner,authority,contro
   }
   fs.mkdirSync(path.join(workspace,'.aidlc'),{recursive:true});fs.writeFileSync(path.join(workspace,'.aidlc/project-description.json'),JSON.stringify(request.prompt)+'\n');
   const recordsFile=path.join(controllerRoot,'stage-records.json');let records=fs.existsSync(recordsFile)?json(recordsFile):[];
+  const operatorInputRevisions=executionSlice?.parentAdmission?inputRevisionContext({controllerRoot:executionSlice.parentAdmission.controllerRoot,request:executionSlice.parentAdmission.request}):inputRevisionContext({controllerRoot,request});
   const executions=[];let failure=null,units=null;
   const refuse=async(stage,detail)=>{
     const prior=records.find(r=>r.stage===stage);const record={stage,profile,failure:detail,artifacts:[],sensors:{status:'fail',checks:[]},evidence:{},invalidated:false};record.digest=digest(record);
@@ -182,7 +189,7 @@ async function runAidlcUnlocked({request,executor,commandRunner,authority,contro
         const contract=effectiveStage(snapshot.stages.find(stage=>stage.slug===id),settings),parts=walk.children.map(child=>child.result.records.find(record=>record.stage===id));
         const combined={stage:id,profile,ceremony:settings,artifacts:parts.flatMap(record=>record.artifacts),sensors:{status:parts.every(record=>record.sensors.status==='disabled')?'disabled':'pass',checks:parts.flatMap(record=>record.sensors.checks)},tests:parts.flatMap(record=>record.tests),dispatch:{status:'completed',units:parts.flatMap(record=>record.dispatch.units),executions:parts.reduce((sum,record)=>sum+record.dispatch.executions,0)},construction_children:walk.children.map(child=>({unit:child.unit,run_id:child.result.run_id,checkpoint:child.checkpoint??null,unit_checkpoint:child.unit_checkpoint??null,verification:child.verification??null})),evidence:{},invalidated:false};
         if(contract.reviewer){
-          let context={shared:{task:request.prompt,profile,defaults:settings,stage:contract,upstream_artifacts:[...initialArtifacts,...combined.artifacts]},units:Object.fromEntries(units.map(unit=>[unit.id,{artifact_targets:artifactPaths(contract,unit.id)}]))};
+          let context={shared:{task:request.prompt,operator_input_revisions:operatorInputRevisions,profile,defaults:settings,stage:contract,upstream_artifacts:[...initialArtifacts,...combined.artifacts]},units:Object.fromEntries(units.map(unit=>[unit.id,{artifact_targets:artifactPaths(contract,unit.id)}]))};
           const verification=await verifyFinalUnits({stage:contract,units,dispatched:combined.dispatch,context,executor,controllerRoot,parentRunId:request.run_id,parentAdmissionStage:id,signal,policy:request.parameters?.dispatch_policy??{}});
           if(verification.status!=='completed'){failure={stage:id,reason:'final_source_review_failed',detail:verification};await refuse(id,failure);break;}
           combined.dispatch.final_verification=verification;executions.push(...(verification.dispatch?.units??[]).flatMap(unit=>unit.receipts??[]));
@@ -210,7 +217,7 @@ async function runAidlcUnlocked({request,executor,commandRunner,authority,contro
     const allArtifacts=[...(executionSlice?.initialArtifacts??[]),...records.filter(record=>!record.invalidated).flatMap(record=>record.artifacts??[])];let artifacts=artifactPaths(stage);
     if(stage.for_each)artifacts=units.flatMap(unit=>artifactPaths(stage,unit.id));
     fs.writeFileSync(path.join(workspace,'.aidlc/state.md'),`# AI-DLC State\n\n## Project\n- **Project**: ${request.prompt.replace(/\n/g,' ')}\n- **Project Description Source**: project-description.json\n- **Scope**: ${testing.contract.scope}\n- **Profile**: ${profile}\n- **Depth**: ${defaults.depth??'unspecified'}\n- **Test Strategy**: ${testing.contract.test_strategy}\n- **Project Type**: ${projectType}\n- **Current Stage**: ${stageId}\n${(executionSlice?.checkpointPolicy??checkpointPolicy).enabled?'- **Construction Checkpoints**: enabled\n- **Construction Iteration**: unit-major\n- **Construction Execution**: serial\n':''}`);
-    let context={shared:{task:request.prompt,profile,defaults:settings,testing_contract:testing.contract,testing_contract_rendered:testing.rendered,testing_policy_basis:testing.policy_basis,construction_checkpoint_policy:{enabled:(executionSlice?.checkpointPolicy??checkpointPolicy).enabled,iteration:'unit-major',execution:'serial'},workspace:'/workspace',stage,artifact_targets:artifacts,upstream_artifacts:allArtifacts,permissions:request.parameters?.permissions??{},plan_approval:'unapproved',prior_check_failures:records.find(record=>record.stage===stageId)?.sensors?.checks??[]},units:{}};
+    let context={shared:{task:request.prompt,operator_input_revisions:operatorInputRevisions,profile,defaults:settings,testing_contract:testing.contract,testing_contract_rendered:testing.rendered,testing_policy_basis:testing.policy_basis,construction_checkpoint_policy:{enabled:(executionSlice?.checkpointPolicy??checkpointPolicy).enabled,iteration:'unit-major',execution:'serial'},workspace:'/workspace',stage,artifact_targets:artifacts,upstream_artifacts:allArtifacts,permissions:request.parameters?.permissions??{},plan_approval:'unapproved',prior_check_failures:records.find(record=>record.stage===stageId)?.sensors?.checks??[]},units:{}};
     if(settings.learnings==='on'){
       const diaries=(stage.for_each?units:[{id:'stage'}]).map(unit=>({id:'memory',stage:stageId,unit:unit.id==='stage'?null:unit.id,path:`.aidlc/artifacts/${stageId}${unit.id==='stage'?'':`/${unit.id}`}/memory.md`}));
       for(const diary of diaries){fs.mkdirSync(path.dirname(path.join(workspace,diary.path)),{recursive:true});if(!fs.existsSync(path.join(workspace,diary.path)))fs.writeFileSync(path.join(workspace,diary.path),'# Stage Learnings\n\n## Observations\n\n## Decisions\n\n## Follow-up\n');}
@@ -391,7 +398,7 @@ async function runAidlcUnlocked({request,executor,commandRunner,authority,contro
       for(const {instruction,commands} of planned)for(const command of commands){
         const result=await commandRunner?.({id:'planned-unit-test',command,cwd:workspace,timeoutMs:request.parameters?.check_timeout_ms??120000,maxOutputBytes:1024*1024,basis:[{path:instruction.path,sha256:readArtifact(workspace,instruction.path).digest}]});
         tests.push({command,unit:instruction.unit,passed:result?.exitCode===0&&!!result.receipt,receipt:result?.receipt??null});}
-      if(sensors.status!=='fail'&&(!tests.length||tests.some(test=>!test.passed)))sensors={...sensors,status:tests.length?'fail':'not_verified',checks:[...sensors.checks,{id:'planned-unit-tests',status:tests.length?'fail':'not_verified',findings:tests.length?['Actual planned unit commands failed.']:['No executable unit test command in approved instructions.']}]};
+      if(sensors.status!=='fail'&&(!tests.length||tests.some(test=>!test.passed)))sensors={...sensors,status:tests.length?'fail':'not_verified',checks:[...sensors.checks,{id:'planned-unit-tests',status:tests.length?'fail':'not_verified',findings:tests.length?['Actual planned unit commands failed.']:['No executable unit test command in approved instructions; use a fenced bash, sh or shell code block.']}]};
     }
     if(stage.workspace_requires===true||context.shared.source_write_authority||context.shared.operation_receipt||dispatched.units.some(unit=>(unit.receipts??[]).some(receipt=>receipt.changed_source?.length)))observation.source_digest=snapshotWorkspace(workspace).source_digest;
     const passing=observation.structural_status==='pass'&&['pass','disabled'].includes(sensors.status);
