@@ -242,16 +242,34 @@
       "path": "docs/README.md"
     },
     {
-      "path": "docs/execution.md"
+      "path": "docs/docker-worker-adapter.md"
     },
     {
       "path": "docs/environment-setup.md"
+    },
+    {
+      "path": "docs/execution.md"
+    },
+    {
+      "path": "docs/input-revisions.md"
     },
     {
       "path": "docs/methodology.md"
     },
     {
       "path": "docs/parity.json"
+    },
+    {
+      "path": "docs/questionnaire-replies.md"
+    },
+    {
+      "path": "docs/recomposition.md"
+    },
+    {
+      "path": "docs/reference.md"
+    },
+    {
+      "path": "docs/review-revisions.md"
     }
   ],
   "assets": [

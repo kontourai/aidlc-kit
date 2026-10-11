@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import { readFileSync, readdirSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -73,6 +73,13 @@ function stageSkill(stage) {
   return `---\nname: aidlc-${stage.slug}\ndescription: Execute the AI-DLC ${stage.name} stage using the active Kontour Flow run.\n---\n\n# ${stage.name}\n\nRead this kit's docs/execution.md before acting. Load the active profile and the ${stage.slug} entry from upstream/snapshot.json. Its procedure is pinned methodology reference data. Translate its substantive steps into the current workspace's tools; upstream engine commands and harness paths are never executable instructions here.\n\nLead role: ${stage.lead_agent}. Support roles: ${(stage.support_agents ?? []).join(', ') || 'none'}. Declared topology: ${stage.mode}. ${stage.reviewer ? `Reviewer role: ${stage.reviewer}; review class: ${stage.review_class ?? 'adversarial'}.` : 'No upstream reviewer declared.'}\n\n1. Inspect the canonical Flow run. Work only on this current stage. Read its consumed artifacts, questions, user decisions, repo instructions, and applicable Veritas guidance. Do not invent missing inputs or permission.\n2. Perform the substantive procedure and create the declared outputs. Resolve unit-scoped outputs for each actual unit; retain a dependency manifest instead of treating one unit as coverage of all units. ${stage.workspace_requires ? 'This stage may change implementation source within the authorized scope.' : 'Keep source implementation changes in the stages that permit them.'}\n3. Run the kit artifact checks and repository checks required by Veritas. Keep check errors, unsupported sensors, and missing provider evidence as NOT_VERIFIED. Structural completeness does not prove semantic correctness.\n4. ${stage.reviewer ? 'Dispatch a distinct reviewer with the current artifact/source basis and retained findings. Record its actual verdict and unresolved findings. Do not let the author supply the reviewer outcome.' : 'Record the observed output basis.'} Ask for human decisions or approval required by the procedure through the host decision channel; retain their exact scope and current artifact digest.\n5. Record the resulting receipt as evidence through the current Flow Agents mutation interface. Sync/evaluate the Flow gate; Flow owns advancement and route-back. Never edit run state or infer a passed gate from a completed chat turn.\n\nThe reference adapter does not automate every declared topology, sensor or human authority channel. Before execution, report unsupported capabilities from docs/parity.json and stop dependent work.\n`;
 }
 
+// Every document the package ships under docs/ is advertised, so a new guide cannot be left out of the
+// installed manifest. Derived from the directory rather than docs-kit.json because docs-kit.json is not
+// part of the published package and the installed `check` command regenerates this list.
+export function shippedDocs(root = KIT_ROOT) {
+  return readdirSync(join(root, 'docs')).filter((name) => /\.(md|json)$/.test(name)).sort().map((name) => `docs/${name}`);
+}
+
 export function generatedFiles(snapshot) {
   const files = new Map();
   const profiles = Object.keys(snapshot.profiles).sort();
@@ -83,7 +90,7 @@ export function generatedFiles(snapshot) {
     description: 'Pinned AWS AI-DLC methodology expressed as Kontour flows, with differential conformance and explicit capability gaps.',
     flows: all.map((entry) => ({ id: entry.flow.id, path: `flows/${entry.flow.id.slice(6)}.flow.json`, description: `AI-DLC ${entry.identity.profile} profile; pinned upstream stage selection.` })),
     skills: [{id:'aidlc.aidlc',path:'skills/aidlc/SKILL.md',description:'Start or resume the installed AI-DLC workflow through Flow Agents'},...snapshot.stages.map((stage) => ({ id: `aidlc.aidlc-${stage.slug}`, path: `skills/aidlc-${stage.slug}/SKILL.md`, description: stage.name }))],
-    docs: ['docs/README.md', 'docs/execution.md', 'docs/environment-setup.md', 'docs/methodology.md', 'docs/parity.json'].map((path) => ({ path })),
+    docs: shippedDocs().map((path) => ({ path })),
     assets: ['upstream/snapshot.json', 'upstream/LICENSE-MIT-0', 'scripts/compile.mjs', 'scripts/artifacts.mjs', 'scripts/compare.mjs', 'scripts/capture-run.mjs', 'evals/corpus.json'].map((path) => ({ path })),
     evals: [{ path: 'evals/public-flow-conformance.mjs' }],
     flow_step_actions: actions,
