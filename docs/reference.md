@@ -29,7 +29,7 @@ Each command's contract is described in its guide:
 
 | Export | Module | Named exports |
 | --- | --- | --- |
-| `@kontourai/aidlc-kit` | `scripts/runtime.mjs` | `runAidlc`, `snapshotWorkspace`, `artifactPaths`, `attachObservation`, `refreshArtifactValidity`, `refreshAndPersistArtifactValidity`, `stageContext`, `restoreUnits` |
+| `@kontourai/aidlc-kit` | `scripts/runtime.mjs` | `runAidlc`, `snapshotWorkspace`, `artifactPaths`, `attachObservation`, `refreshArtifactValidity`, `refreshAndPersistArtifactValidity`, `currentOutputInventory`, `stageContext`, `restoreUnits` |
 | `@kontourai/aidlc-kit/run` | `scripts/run.mjs` | `executeRequestFile`, `executeKit`, `runAidlc` |
 | `@kontourai/aidlc-kit/executor` | `scripts/executor.mjs` | `createDockerExecutor` |
 | `@kontourai/aidlc-kit/compile` | `scripts/compile.mjs` | `compileProfile`, `readSnapshot`, `generatedFiles`, `writeGenerated`, `requestBindingValue`, `requestBindingDigest`, `digest`, `KIT_ROOT` |
