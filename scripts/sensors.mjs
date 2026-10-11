@@ -252,7 +252,13 @@ function claims(stage, outputs, context, read) {
     const visible=withoutInlineCode(text.replace(/<!--[^]*?(?:-->|$)/g, ''));
     if(/<(?:\/?[A-Za-z][A-Za-z0-9-]*\b|https?:\/\/|mailto:|[^<>\s]+@)[^>]*>|^\s*\[(?!Answer\])[^\]]+\]:|\\\[|&#?\w+;/m.test(visible))return true;
     const source=/^(?:desc|scope|Q\d+|memory:[\w.-]+|assumption)$/;
-    for(const match of visible.matchAll(/\[([^\]]+)\](\s*)(?=(\(|\[([^\]]+)\]))/g))if(match[3]==='('||!source.test(match[1])||!source.test(match[4]))return true;
+    for(const match of visible.matchAll(/\[([^\]]+)\](\s*)(?=(\(|\[([^\]]+)\]))/g)){
+      // Inline Markdown links require an adjacent opening parenthesis. A
+      // registered citation followed by whitespace and parenthetical prose is
+      // ordinary visible text, including a code-span profile name.
+      if(match[3]==='('){if(match[2]===''||!source.test(match[1]))return true;}
+      else if(!source.test(match[1])||!source.test(match[4]))return true;
+    }
     return false;
   };
   if (ambiguous(q)) findings.push('Questions contain unsupported HTML or reference-link syntax');
