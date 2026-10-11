@@ -150,3 +150,14 @@ test('learning prompt follows actual phase and diary target ownership, preservin
  const author=buildExecutionPrompt({dispatch:{phase:'integrate',role:'fixture',context},workspace:'/workspace',sourceDigest:'a'.repeat(64)});assert.ok(author.instructions.some(line=>/Diary: stage\/memory.md/.test(line)));assert.equal(author.dispatch.context.learning_diary,context.learning_diary);
  const unowned=buildExecutionPrompt({dispatch:{phase:'inline',role:'fixture',context:{...context,artifact_targets:[{id:'output',path:'stage/output.md'}]}},workspace:'/workspace',sourceDigest:'a'.repeat(64)});assert.ok(!unowned.instructions.some(line=>/Diary:/.test(line)));assert.equal(unowned.dispatch.context.learning_diary,undefined);
 });
+
+
+test('adapted execution prompt distinguishes immutable approved inputs from writable outputs without changing dispatch custody',()=>{
+ const questions={id:'questions',path:'.aidlc/questions.md',digest:'approved-question-digest'},plan={id:'plan',path:'.aidlc/plan.md',digest:'approved-plan-digest'},output={id:'output',unit:'own',path:'.aidlc/output.md'},peer={id:'peer',unit:'other',path:'.aidlc/peer.md'};
+ const dispatch={phase:'inline',unit:'own',role:'fixture',context:{artifact_targets:[questions,plan,output,peer],approved_summary_basis:[questions],approved_plan_basis:[plan]}};const original=structuredClone(dispatch);
+ const prompt=buildExecutionPrompt({dispatch,workspace:'/workspace',sourceDigest:'source'});
+ assert.deepEqual(prompt.writable_artifact_targets,[output]);assert.deepEqual(prompt.read_only_approved_inputs,[plan,questions]);assert.deepEqual(prompt.dispatch,original);assert.deepEqual(dispatch,original);
+ assert.ok(prompt.instructions.some(line=>line.includes('Do not append, reset or answer confirmation cells')));assert.ok(prompt.instructions.some(line=>line.includes('takes precedence over conflicting inline vendor')));assert.ok(prompt.instructions.some(line=>line.includes('host presents and records consolidated summary confirmation')));
+ const contribution={id:'contribution',unit:'own',path:'.aidlc/contribution.md'};assert.deepEqual(buildExecutionPrompt({dispatch:{...dispatch,phase:'contribute'},workspace:'/workspace',sourceDigest:'source',outputTargets:[contribution]}).writable_artifact_targets,[contribution]);
+ assert.deepEqual(buildExecutionPrompt({dispatch:{...dispatch,phase:'review'},workspace:'/workspace',sourceDigest:'source'}).writable_artifact_targets,[]);
+});

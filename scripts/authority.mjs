@@ -126,15 +126,17 @@ export function recordControllerDecision({controllerRoot,pendingFile,reference,d
   return {reference:`controller-decision:${payload.id}`,decision_kind:'host-observed-operator-interaction',receipt};
 }
 
-export function buildExecutionPrompt({dispatch,workspace,sourceDigest}){
-  const context=structuredClone(dispatch.context??{}),stage=context.stage??{},targets=context.artifact_targets??[];
+export function buildExecutionPrompt({dispatch,workspace,sourceDigest,outputTargets}){
+  const context=structuredClone(dispatch.context??{}),stage=context.stage??{},targets=outputTargets??context.artifact_targets??[];
+  const approvedInputs=[...(context.approved_plan_basis??[]),...(context.approved_summary_basis??[])],approvedPaths=new Set(approvedInputs.map(ref=>ref.path));
+  const writableTargets=dispatch.phase==='review'?[]:targets.filter(ref=>(!dispatch.unit||dispatch.unit==='stage'||ref.unit===dispatch.unit)&&!approvedPaths.has(ref.path));
   const ownsDiary=typeof context.learning_diary==='string'&&targets.some(target=>target.path===context.learning_diary);
   const substantive=['inline','draft','pipeline-link','integrate','revise','revise-input'].includes(dispatch.phase)&&!context.summary_only&&!context.planning_only&&!['review-only','contribution-only'].includes(dispatch.output_scope);
   const learningAuthorized=ownsDiary&&substantive;
   if(!learningAuthorized)for(const key of ['learning_diary','learning_diaries','learning_protocol'])delete context[key];
   const snapshot=readSnapshot();const persona=snapshot.agents.find(agent=>agent.slug===dispatch.role)?.procedure??'';
   return {schema:'kontour.aidlc.stage_execution_request',version:'1.0',canonical_workspace:workspace,unit_scope:dispatch.unit,
-    source_digest:sourceDigest,dispatch:{...dispatch,context},inline_voice_knowledge:(dispatch.voices??[]).map(role=>({role,procedure:snapshot.agents.find(agent=>agent.slug===role)?.procedure??''})),
+    source_digest:sourceDigest,writable_artifact_targets:writableTargets,read_only_approved_inputs:approvedInputs,dispatch:{...dispatch,context},inline_voice_knowledge:(dispatch.voices??[]).map(role=>({role,procedure:snapshot.agents.find(agent=>agent.slug===role)?.procedure??''})),
     instructions:[
       'Execute the substantive pinned AI-DLC procedure for this stage. The host owns canonical state, approvals, gate advancement and source publication; upstream aidlc engine commands and harness paths are reference data and must not be executed. Do not launch another workflow or invoke orchestration commands such as flow-agents kit run, kontour-aidlc or aidlc engine. Any discovered workflow entry skill is for the operator, not this stage worker.',
       `Phase ${dispatch.phase}; role ${dispatch.role}. ${dispatch.phase==='review'?'Read-only independent review: write no files.':'Write only this stage output scope and authorized application source.'}`,
@@ -146,11 +148,13 @@ export function buildExecutionPrompt({dispatch,workspace,sourceDigest}){
       context.operator_review_revision?`Actual signed operator request for changes: ${JSON.stringify(context.operator_review_revision)}. Resolve the referenced current findings and clarification within the existing source/artifact authority. Preserve finding IDs and do not treat requested revision as review acceptance.`:'',
       'Reference prior findings by their unchanged ids. A review covers the frozen source and artifact basis. Do not weaken tests or declared quality targets to obtain a pass.',
       'Native generated metadata is adapted to this controller. If traceability.json is a required output, supply a candidate mapping {stage, unit (only for a real unit), upstream_ids:[actual IDs], coverage:[{id,status:"OK"|"GAP"|"ORPHAN"|"Deferred"|"N/A",target}], reverse:[{id,status,target}]}. Read actual upstream IDs and existing implementation targets; never invent IDs or claim the mapping proves semantic correctness. The host sensor validates this candidate instead of running native engine commands.',
-      context.approved_summary_basis?'Summary question bytes have current-basis operator confirmation; consume them and preserve those exact bytes.':'Do not claim unconfirmed summary assumptions are approved.',
+      context.approved_summary_basis?'Summary question bytes have current-basis operator confirmation; consume them and preserve those exact bytes. Do not append, reset or answer confirmation cells in these approved inputs.':'Do not claim unconfirmed summary assumptions are approved.',
       context.operator_questionnaire_reply?`Actual host-observed operator answers, bound to this questionnaire and signed decision: ${JSON.stringify(context.operator_questionnaire_reply)}. Consume these as operator input; retain the question IDs and exact answered question bytes. Approval alone supplies no missing answers.`:'',
       'For every Markdown artifact use the pinned required sections and source/requirement ids. Preserve real questions and assumptions. Questions awaiting operator policy are not answers supplied by the model.',
       learningAuthorized?`${context.learning_protocol} Diary: ${context.learning_diary}`:'The learning ritual is deferred unless this substantive invocation owns the diary target; this scoped phase must not write a learning diary.',
-      `Task: ${context.task??''}`,`Actual required output paths: ${JSON.stringify(targets)}`,
+      'This adapted host contract takes precedence over conflicting inline vendor procedure instructions about orchestration, approvals or question-file updates. The host presents and records consolidated summary confirmation through its own signed operator decision; workers must not supply operator approval or fabricate confirmation answers.',
+      `Read-only approved input paths and digests: ${JSON.stringify(approvedInputs)}. Consume them unchanged even when the stage artifact inventory also names them.`,
+      `Task: ${context.task??''}`,`Actual writable output paths: ${JSON.stringify(writableTargets)}`,
       context.testing_contract_rendered?`Host-resolved authoritative testing posture for this bound scope. Use the exact block in the code-generation plan; preserve it unchanged. Policy evidence: ${JSON.stringify(context.testing_policy_basis)}\n${context.testing_contract_rendered}`:'',
       `Selected profile defaults: ${JSON.stringify(context.defaults??{})}`,`Pinned procedure: ${dispatch.procedure??stage.procedure??''}`,`Role knowledge: ${persona}`
     ]};
