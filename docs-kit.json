@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "product": "aidlc-kit",
+  "title": "AI-DLC Kit",
+  "tagline": "The pinned AWS AI-DLC methodology, run as a Flow Agents kit on Flow gates and Surface evidence",
+  "repo": "kontourai/aidlc-kit",
+  "landing": "README.md",
+  "documents": [
+    { "source": "docs/environment-setup.md", "section": "Start Here" },
+    { "source": "docs/README.md", "section": "Concepts" },
+    { "source": "docs/methodology.md", "section": "Concepts" },
+    { "source": "docs/execution.md", "section": "Concepts" },
+    { "source": "docs/questionnaire-replies.md", "section": "Guides" },
+    { "source": "docs/review-revisions.md", "section": "Guides" },
+    { "source": "docs/recomposition.md", "section": "Guides" },
+    { "source": "docs/reference.md", "section": "Reference", "covers": ["scripts/cli.mjs"] },
+    { "source": "docs/docker-worker-adapter.md", "section": "Reference" }
+  ],
+  "topics": [
+    { "id": "install", "title": "Install and run the kit", "source": "README.md" },
+    { "id": "engine-setup", "title": "Native engine login and installed-kit setup", "source": "docs/environment-setup.md#native-engine-setup" },
+    { "id": "provider-auth", "title": "Datum provider references and credentials", "source": "docs/environment-setup.md#datum-provider-setup" },
+    { "id": "docker-worker", "title": "Isolated Docker worker and provider broker", "source": "docs/environment-setup.md#isolated-codex-setup" },
+    { "id": "methodology-snapshot", "title": "Pinned AI-DLC snapshot: stages, profiles and personas", "source": "docs/methodology.md#snapshot-contract" },
+    { "id": "parity", "title": "What methodology parity does and does not prove", "source": "docs/methodology.md#what-parity-means" },
+    { "id": "artifacts", "title": "Artifact observation and invalidation", "source": "docs/execution.md#artifacts" },
+    { "id": "installed-execution", "title": "Installed execution, budgets and operator authority", "source": "docs/execution.md#installed-execution-and-measurement" },
+    { "id": "testing-posture", "title": "Testing posture and code-plan approval", "source": "docs/execution.md#host-testing-posture-and-code-plan-authority" },
+    { "id": "construction-checkpoints", "title": "Per-unit construction checkpoints", "source": "docs/execution.md#per-unit-construction-checkpoints" },
+    { "id": "profile-composition", "title": "Per-run profile composition", "source": "docs/execution.md#per-run-profile-composition" },
+    { "id": "questionnaire-replies", "title": "Answer questionnaires through the operator inbox", "source": "docs/questionnaire-replies.md" },
+    { "id": "review-revisions", "title": "Request changes after review and recover a controller lock", "source": "docs/review-revisions.md" },
+    { "id": "recomposition", "title": "Change pending stages in a running workflow", "source": "docs/recomposition.md" },
+    { "id": "cli", "title": "kontour-aidlc CLI commands", "source": "docs/reference.md#kontour-aidlc-cli" }
+  ],
+  "exclude": []
+}

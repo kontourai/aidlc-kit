@@ -113,6 +113,8 @@ running plan requires a separately bound live recomposition decision.
 
 Live pending-stage add/skip uses the ordinary signed operator inbox and canonical Flow amendment ledger; see [recomposition.md](recomposition.md). The original request and provider budgets are retained.
 
+## Resuming across operator decisions
+
 Summary questions, intent outputs, code plans, and observed author/reviewer phases retain their signed dispatch checkpoints across ordinary operator waits. Resume verifies the signed host checkpoint and current source/artifact basis before reusing the producer output; changed inputs require a new exact decision. The shared checkpoint binding includes canonical gate retry/reentry history; a new rejected gate visit reruns the producer even when failure text and artifacts are unchanged. Review-disposition resume binds the observed post-author source and retained pre-author authorization, without rerunning an already reviewed producer. Unit completion still uses public Flow claims, settlement and join. These checkpoint signatures record host observation and do not constitute human approval.
 
 Dependent unit dispatch resumes from a host-verified observed outcome after each exact review disposition. Accepted upstream units retain their original actor identities and receipts, and public Flow settlement admits newly ready downstream units. A downstream reviewer outcome requires its own current decision; an upstream approval never covers a worker that had not run. Cumulative stage and provider budgets remain in force across waits.

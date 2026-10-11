@@ -1,3 +1,4 @@
+# Standard kit execution entry
 
 A kit declares a standard entry in `kit.json`:
 
