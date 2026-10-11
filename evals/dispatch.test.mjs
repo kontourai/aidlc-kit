@@ -257,3 +257,7 @@ test('trusted revision admission still cannot exceed original operator budget',a
  port.decide=async input=>({authorized:true,decision:'request_changes',reference:'test-host-current-revision',revision:{id:input.unit,finding_ids:['F1'],clarification:'Correct the current finding.'}});
  const result=await dispatchStage({stage:contract,executor:port,policy});assert.equal(result.status,'blocked');assert.equal(result.reason,'review_revision_budget');assert.equal(port.events.filter(event=>event.kind==='start'&&event.phase==='revise').length,1);assert.equal(result.units[0].reviews.length,2);
 });
+
+test('executor concurrency capability bounds unit admission despite a higher dispatch policy',async t=>{
+ const port=processPort(t);port.maxParallel=1;const outcome=await run(port,{units:[{id:'a',mutable_resources:['a']},{id:'b',mutable_resources:['b']}],policy:{maxParallel:4}});assert.equal(outcome.status,'completed');assert.equal(port.peak,1);assert.ok(port.events.findIndex(e=>e.unit==='b'&&e.kind==='start')>port.events.findIndex(e=>e.unit==='a'&&e.kind==='end'));
+});

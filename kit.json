@@ -67,6 +67,11 @@
   ],
   "skills": [
     {
+      "id": "aidlc.aidlc",
+      "path": "skills/aidlc/SKILL.md",
+      "description": "Start or resume the installed AI-DLC workflow through Flow Agents"
+    },
+    {
       "id": "aidlc.aidlc-workspace-scaffold",
       "path": "skills/aidlc-workspace-scaffold/SKILL.md",
       "description": "Workspace Scaffold"
@@ -238,6 +243,9 @@
     },
     {
       "path": "docs/execution.md"
+    },
+    {
+      "path": "docs/environment-setup.md"
     },
     {
       "path": "docs/methodology.md"
@@ -6149,6 +6157,14 @@
     }
   ],
   "skill_roles": [
+    {
+      "skill_id": "aidlc.aidlc",
+      "role": "entrypoint",
+      "flow_id": "aidlc.classic",
+      "step_ids": [],
+      "expectation_ids": [],
+      "artifacts": []
+    },
     {
       "skill_id": "aidlc.aidlc-workspace-scaffold",
       "role": "step",

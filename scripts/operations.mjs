@@ -30,23 +30,26 @@ export function createCommandOperationProvider({config,commandRunner,controllerR
 }
 
 /** Actual host operation execution; operator argv, fixed cwd, bounded group lifetime. */
-export function createOperationCommandRunner({workspace,controllerRoot}) {
+export function createOperationCommandRunner({workspace,controllerRoot,signal:runSignal,remainingMs}) {
   const admitted=fs.realpathSync(workspace),root=path.join(controllerRoot,'operation-commands');fs.mkdirSync(root,{recursive:true,mode:0o700});
   return async input=>{
     if(fs.realpathSync(input.cwd)!==admitted||!Array.isArray(input.command)||!input.command.length||input.command.some(arg=>typeof arg!=='string'||!arg||arg.includes('\0')))throw new Error('Operation argv/cwd outside host admission');
     if(!Number.isSafeInteger(input.timeoutMs)||input.timeoutMs<1||input.timeoutMs>3600000||!Number.isSafeInteger(input.maxOutputBytes)||input.maxOutputBytes<1||input.maxOutputBytes>1024*1024)throw new Error('Operation process budget required');
-    const id=randomUUID(),started=Date.now();let bytes=0,output=[],overflow=false,timedOut=false,cancelled=false;
+    const signal=input.signal??runSignal;if(signal?.aborted)throw new Error('Operation execution cancelled');
+    const remaining=remainingMs?.();if(remaining!==undefined&&remaining<=0)throw new Error('Run execution budget exhausted');
+    const timeoutMs=remaining===undefined?input.timeoutMs:Math.min(input.timeoutMs,remaining);
+    const id=randomUUID(),started=Date.now();let bytes=0,output=[],stdout=[],stderr=[],overflow=false,timedOut=false,cancelled=false;
     const child=spawn(input.command[0],input.command.slice(1),{cwd:admitted,env:process.env,stdio:['ignore','pipe','pipe'],detached:process.platform!=='win32'});
     const kill=()=>{try{if(process.platform==='win32')child.kill('SIGKILL');else process.kill(-child.pid,'SIGKILL');}catch{child.kill('SIGKILL');}};
-    const capture=chunk=>{bytes+=chunk.length;if(bytes>input.maxOutputBytes){overflow=true;kill();return;}output.push(Buffer.from(chunk));};
-    child.stdout.on('data',capture);child.stderr.on('data',capture);
-    const abort=()=>{cancelled=true;kill();};input.signal?.addEventListener('abort',abort,{once:true});if(input.signal?.aborted)abort();
-    const timer=setTimeout(()=>{timedOut=true;kill();},input.timeoutMs);
+    const capture=(chunk,stream)=>{bytes+=chunk.length;if(bytes>input.maxOutputBytes){overflow=true;kill();return;}const data=Buffer.from(chunk);output.push(data);stream.push(data);};
+    child.stdout.on('data',chunk=>capture(chunk,stdout));child.stderr.on('data',chunk=>capture(chunk,stderr));
+    const abort=()=>{cancelled=true;kill();};signal?.addEventListener('abort',abort,{once:true});if(signal?.aborted)abort();
+    const timer=setTimeout(()=>{timedOut=true;kill();},timeoutMs);
     let error=null,exitCode;
     try{exitCode=await new Promise(resolve=>{child.once('error',err=>{error=err.message;resolve(null);});child.once('close',resolve);});}
-    finally{clearTimeout(timer);input.signal?.removeEventListener('abort',abort);}
+    finally{clearTimeout(timer);signal?.removeEventListener('abort',abort);}
     const receipt={id,command:input.command,cwd:admitted,basis:input.basis,exit_code:exitCode,timeout:timedOut,cancelled,overflow,error,output_digest:digest(Buffer.concat(output)),elapsed_ms:Date.now()-started};
     fs.writeFileSync(path.join(root,`${id}.json`),JSON.stringify(receipt)+'\n',{flag:'wx',mode:0o600});
-    return {exitCode:timedOut||cancelled||overflow||error?null:exitCode,receipt};
+    return {exitCode:timedOut||cancelled||overflow||error?null:exitCode,receipt,stdout:Buffer.concat(stdout).toString('utf8'),stderr:Buffer.concat(stderr).toString('utf8')};
   };
 }

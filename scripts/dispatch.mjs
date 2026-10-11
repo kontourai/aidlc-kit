@@ -120,7 +120,7 @@ export async function dispatchStage({ stage, units, executor, context = {}, poli
     if (['pipeline', 'mob'].includes(stage.mode) && !supports.length) fail('invalid_topology', 'Pipeline and mob require support participants');
     if ((executor.loadBasis && !executor.saveBasis) || (!executor.loadBasis && executor.saveBasis)) fail('invalid_executor', 'Initial frozen-basis load/save ports must be paired');
     if ((executor.loadReceipt && !executor.saveReceipt) || (!executor.loadReceipt && executor.saveReceipt)) fail('invalid_executor', 'Durable receipt load/save ports must be paired');
-    const concurrency = bounded(policy.maxParallel, 4, 16, 'maxParallel');
+    const concurrency = Math.min(bounded(policy.maxParallel, 4, 16, 'maxParallel'),bounded(executor.maxParallel,16,16,'executor.maxParallel'));
     const executionBudget = bounded(policy.maxExecutions, 128, 2048, 'maxExecutions');
     const declaredReviewBudget = bounded(stage.reviewer_max_iterations, 2, 16, 'reviewer_max_iterations');
     const reviewBudget = bounded(policy.maxReviewIterations, declaredReviewBudget, 16, 'maxReviewIterations');

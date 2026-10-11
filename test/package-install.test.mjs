@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
-import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync,lstatSync} from 'node:fs';
+import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync,lstatSync,realpathSync} from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -18,6 +18,8 @@ test('npm tarball installs away from source and activates through public kit con
   command(['npm','install','--ignore-scripts','--prefer-offline','--no-audit','--no-fund','--package-lock=false',tarball,engine],consumer);
   const kit=path.join(consumer,'node_modules/@kontourai/aidlc-kit');assert.equal(lstatSync(kit).isSymbolicLink(),false);
   const manifest=JSON.parse(readFileSync(path.join(kit,'package.json'),'utf8'));
+  assert.deepEqual(manifest.bin,{'kontour-aidlc':'scripts/cli.mjs'});
+  assert.match(command([path.join(consumer,'node_modules/.bin/kontour-aidlc'),'--help'],consumer),/kontour-aidlc profiles/);
   assert.equal(manifest.dependencies['@kontourai/flow'],'5.2.0');assert.equal(manifest.dependencies['@kontourai/surface'],'5.0.0');
   command([process.execPath,'scripts/cli.mjs','profiles'],kit);
   command([process.execPath,'--input-type=module','-e',"await import('@kontourai/flow-agents/docker-worker');await import('@kontourai/flow-agents/provider-broker');"],consumer);
@@ -26,6 +28,15 @@ test('npm tarball installs away from source and activates through public kit con
   command([process.execPath,'--test','evals/dispatch-checkpoints.test.mjs','evals/review-request-changes.test.mjs','evals/stage-level-construction.test.mjs'],kit);
   const cli=path.join(consumer,'node_modules/@kontourai/flow-agents/build/src/cli.js');const workspace=consumer;
   command([process.execPath,cli,'kit','install',kit,'--dest',workspace],consumer);
+  command([process.execPath,'--input-type=module','-e',"await import('@kontourai/flow-agents/engine-host');await import('@kontourai/flow-agents/kit-setup');await import('@kontourai/flow-agents/kit-activation');"],consumer);
+  const application=path.join(scratch,'application');mkdirSync(application);
+  writeFileSync(path.join(application,'README.md'),'Application source stays separate from the runtime bootstrap.\n');
+  command([process.execPath,cli,'kit','activate','--dest',workspace,'--target',application,'--adapter','codex','--kits','aidlc','--format','json'],consumer);
+  assert.equal(readFileSync(path.join(application,'README.md'),'utf8'),'Application source stays separate from the runtime bootstrap.\n');
+  const setup=spawnSync(process.execPath,[cli,'kit','setup','aidlc','--dest',workspace,'--workspace',application,'--controller-root',path.join(scratch,'setup-private'),'--engine','codex','--model','package-proof-model','--auth','native','--allow-host-execution','--prompt','Package setup proof only','--dry-run'],{cwd:consumer,encoding:'utf8'});
+  assert.ok([0,1].includes(setup.status),setup.stderr);
+  const preview=JSON.parse(setup.stdout);assert.equal(preview.dry_run,true);assert.equal(preview.request.host_setup.auth.mode,'native');assert.equal(preview.request.host_setup.host_access_granted,true);assert.equal(preview.request.workspace,realpathSync(application));
+  assert.ok(Array.isArray(preview.checks)); // Availability is observed, never assumed to imply login or a live workflow.
   const activation=JSON.parse(command([process.execPath,cli,'kit','activate','--dest',workspace,'--format','json'],consumer));
   const recomposition=JSON.parse(command([process.execPath,path.join(root,'test/installed-recomposition-proof.mjs'),consumer,scratch],consumer));assert.equal(recomposition.status,'pass');assert.equal(recomposition.model_or_provider_invoked,false);
   for(const mode of ['input-source','input-artifact','recomputed-input']){const proof=JSON.parse(command([process.execPath,path.join(root,'test/installed-recomposition-proof.mjs'),consumer,scratch,mode],consumer));assert.equal(proof.status,'pass');assert.equal(proof.mode,mode);}
