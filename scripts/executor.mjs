@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { digest } from './compile.mjs';
 import { readArtifact } from './artifacts.mjs';
 import { snapshotWorkspace } from './runtime.mjs';
-import { buildExecutionPrompt, observeOutputs } from './authority.mjs';
+import { buildExecutionPrompt, observeOutputs,sealControllerCheckpoint,verifyControllerCheckpoint } from './authority.mjs';
 import {stampTestingPlan} from './testing-posture.mjs';
 import {createPublicationJail} from './publication.mjs';
 
@@ -78,13 +78,27 @@ export function createDockerExecutor({request,controllerRoot,workerRunner,signal
       const targets=contribution?[{id:`contribution-${dispatch.role}`,stage:dispatch.stage,unit:dispatch.unit,path:`.aidlc/contributions/${dispatch.stage}/${dispatch.unit}/${dispatch.role}.md`}]:dispatch.context.artifact_targets??[];
       const ownTargets=targets.filter(ref=>!dispatch.unit||dispatch.unit==='stage'||ref.unit===dispatch.unit);
       const approvedInputs=new Map([...(dispatch.context.approved_plan_basis??[]),...(dispatch.context.approved_summary_basis??[])].map(ref=>[ref.path,ref.digest]));
-      const priorArtifacts=[...(dispatch.context.upstream_artifacts??[]),...(dispatch.context.approved_plan_basis??[]),...(dispatch.context.approved_summary_basis??[]),...(dispatch.reviewed_artifacts??[]),...(dispatch.revised_artifacts??[]),...(dispatch.upstream??[]).flatMap(value=>value.artifacts??[]),...(dispatch.draft?.artifacts??[]),...(dispatch.contributions??dispatch.positions??[]).flatMap(value=>value.artifacts??[])];
+      const inputLineage=[];
+      const upstreamArtifacts=(dispatch.context.upstream_artifacts??[]).map(ref=>{
+        if(dispatch.phase!=='review'||approvedInputs.has(ref.path)||typeof ref.id!=='string'||!ref.id||typeof dispatch.stage!=='string')return ref;
+        const target=ownTargets.find(target=>target.path===ref.path&&target.id===ref.id),sameUnit=!dispatch.unit||dispatch.unit==='stage'?(ref.unit??'stage')==='stage':ref.unit===dispatch.unit;
+        if(!target||ref.stage!==dispatch.stage||!sameUnit)return ref;
+        const current=(dispatch.reviewed_artifacts??[]).find(value=>value.path===ref.path),basis=dispatch.basis?.artifacts?.find(value=>value.path===ref.path);
+        if(!current||current.digest===ref.digest||current.digest!==basis?.digest)return ref;
+        const proof=history.starts.findLast(start=>start.publication?.checkpoint.stage===dispatch.stage&&start.publication.checkpoint.unit===dispatch.unit&&start.publication.checkpoint.artifacts.some(value=>value.path===ref.path&&value.digest===current.digest));
+        if(!proof||proof.publication.checkpoint.invocation_id!==proof.invocation_id||proof.publication.checkpoint.request_digest!==proof.request_digest||proof.publication.checkpoint.receipt.request_digest!==proof.request_digest||proof.publication.checkpoint.source_digest!==dispatch.basis.source_digest||proof.publication.checkpoint.source_digest!==before.source_digest||!verifyControllerCheckpoint({controllerRoot,checkpoint:proof.publication.checkpoint,envelope:proof.publication.envelope}))return ref;
+        if(readArtifact(workspace,ref.path).digest!==current.digest)return ref;
+        inputLineage.push({prior:structuredClone(ref),current:{...ref,digest:current.digest},author_receipt:proof.publication.checkpoint.receipt,publication:proof.publication});
+        return {...ref,digest:current.digest};
+      });
+      const priorArtifacts=[...upstreamArtifacts,...(dispatch.context.approved_plan_basis??[]),...(dispatch.context.approved_summary_basis??[]),...(dispatch.reviewed_artifacts??[]),...(dispatch.revised_artifacts??[]),...(dispatch.upstream??[]).flatMap(value=>value.artifacts??[]),...(dispatch.draft?.artifacts??[]),...(dispatch.contributions??dispatch.positions??[]).flatMap(value=>value.artifacts??[])];
       const inputArtifacts=new Map();
       for(const ref of priorArtifacts){if(!safeRel(ref.path))throw new Error('Invalid artifact input path');try{const observed=readArtifact(workspace,ref.path);if(ref.digest!==undefined&&ref.digest!==observed.digest)throw new Error('Artifact input basis changed before worker copy');inputArtifacts.set(ref.path,observed.digest);const dest=path.join(fork,ref.path);fs.mkdirSync(path.dirname(dest),{recursive:true});fs.copyFileSync(path.join(workspace,ref.path),dest);}catch(error){if(error.code!=='ENOENT'||ref.digest!==undefined||approvedInputs.has(ref.path)||ref.optional!==true)throw error;}}
       const assertInputsCurrent=(root)=>{for(const [file,expected] of inputArtifacts){if(dispatch.phase!=='review'&&ownTargets.some(target=>target.path===file)&&!approvedInputs.has(file))continue;let actual;try{actual=readArtifact(root,file).digest;}catch{throw new Error('Worker removed or made an assigned input unreadable');}if(actual!==expected)throw new Error(approvedInputs.has(file)?'Worker changed approved plan/test instructions':'Worker changed an assigned read-only input');}};
       for(const diary of dispatch.context.learning_diaries??[]){const source=path.join(workspace,diary.path);if(fs.existsSync(source)){fs.mkdirSync(path.dirname(path.join(fork,diary.path)),{recursive:true});fs.copyFileSync(source,path.join(fork,diary.path));}}
       for(const local of ['.aidlc/state.md','.aidlc/project-description.json']){const source=path.join(workspace,local);if(fs.existsSync(source)){fs.mkdirSync(path.dirname(path.join(fork,local)),{recursive:true});fs.copyFileSync(source,path.join(fork,local));}}
-      const prompt=buildExecutionPrompt({dispatch,workspace,sourceDigest:before.source_digest,outputTargets:ownTargets});
+      const prompt=buildExecutionPrompt({dispatch:{...dispatch,context:{...dispatch.context,upstream_artifacts:upstreamArtifacts}},workspace,sourceDigest:before.source_digest,outputTargets:ownTargets});
+      if(inputLineage.length){prompt.original_dispatch_digest=digest(dispatch);prompt.read_only_input_lineage=inputLineage;prompt.instructions.push('Current reviewed own outputs supersede historical same-stage upstream references only through the host-observed author publication lineage supplied here. Review the current frozen bytes; original author receipts and retired references remain history, not current approval.');}
       prompt.instructions.push(`This invocation's exact writable output targets: ${JSON.stringify(dispatch.phase==='review'?[]:ownTargets.filter(ref=>!approvedInputs.has(ref.path)))}. ${contribution?'Create only your own contribution file; other contributors are intentionally absent.':''}`);
       prompt.allowed_source_changes=dispatch.phase!=='review'&&!contribution&&!dispatch.context.planning_only&&(dispatch.context.stage?.workspace_requires===true||typeof dispatch.context.source_write_authority==='string');
       const contextFile=path.join(workerRoot,'contexts',`${identity.instance_id}.json`);put(contextFile,prompt);
@@ -98,7 +112,7 @@ export function createDockerExecutor({request,controllerRoot,workerRunner,signal
       if(request.host_setup?.isolation==='trusted-host'&&snapshotWorkspace(workspace).source_digest!==before.source_digest)throw new Error('Native worker changed canonical source outside publication');
       if(nativeArtifactBasis!==null&&artifactInventory(workspace)!==nativeArtifactBasis)throw new Error('Native worker changed canonical artifacts outside publication');
       assertInputsCurrent(workspace);
-      const observation={worker:identity.instance_id,container_id:worker.observed.container_id,provider_thread_id:worker.provider_thread_id,context_digest:worker.observed.context_digest,stdin_digest:worker.observed.stdin_digest,source_fork_digest:worker.observed.source_fork_digest,input_basis:dispatch.basis,terminal:worker.terminal,usage:worker.usage};
+      const observation={...(inputLineage.length?{input_lineage:inputLineage}:{}),worker:identity.instance_id,container_id:worker.observed.container_id,provider_thread_id:worker.provider_thread_id,context_digest:worker.observed.context_digest,stdin_digest:worker.observed.stdin_digest,source_fork_digest:worker.observed.source_fork_digest,input_basis:dispatch.basis,terminal:worker.terminal,usage:worker.usage};
       const receipt={id:identity.instance_id,digest:digest(observation),request_digest:dispatch.request_digest};
       if(worker.storage_violation)throw Object.assign(new Error(`Worker storage budget refused: ${worker.storage_violation.reason}`),{code:'storage_budget',observation:worker.storage_violation});
       const native=request.host_setup?.isolation==='trusted-host';
@@ -172,6 +186,8 @@ export function createDockerExecutor({request,controllerRoot,workerRunner,signal
         for(const ref of returned){const payload=payloads.get(ref.path);publication.write(ref.path,payload.bytes,payload.mode);}
       };
       const applied=merge.then(apply);merge=applied.catch(()=>{});await applied;
+      const publicationCheckpoint={stage:dispatch.stage,unit:dispatch.unit,invocation_id:identity.instance_id,request_digest:dispatch.request_digest,receipt:structuredClone(receipt),artifacts:returned.map(ref=>({path:ref.path,digest:ref.digest})),source_digest:snapshotWorkspace(workspace).source_digest};
+      attempt.publication={checkpoint:publicationCheckpoint,envelope:sealControllerCheckpoint({controllerRoot,checkpoint:publicationCheckpoint})};persistHistory();
       return {status:response.status,identity,identity_basis:'executor-observed',receipt,input_basis:dispatch.basis,artifacts:returned.map(ref=>({path:ref.path,digest:ref.digest})),observation,changed_source:changed,...(contribution?{objections:response.objections??[],role:dispatch.role}:{})};
     }
   };
