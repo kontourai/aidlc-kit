@@ -6,7 +6,9 @@ This kit runs AI-DLC through Flow Agents and Flow. It does not invoke the AWS `a
 
 Install Node.js 24 and the chosen engine's ordinary CLI. Sign in with that engine's own login flow. Codex supports `codex login` or headless `codex login --device-auth`; `codex login status` checks its session. Codex may store authentication in its OS keyring or private `~/.codex/auth.json`, depending on its configuration. A file is not guaranteed to exist. Claude, Kiro, Cursor, OpenCode and Copilot own their corresponding login and refresh flows.
 
-Native execution uses those existing sessions on the selected host. It requires explicit host execution permission and provides no OS filesystem confinement or credential confinement. The explicit host grant permits native tool use, including reads and tests during review. A reviewer that changes its snapshot is refused by post-execution integrity checks. Review snapshots and canonical byte checks observe changes; they are not a sandbox. Native workers execute and publish serially so a peer publication cannot be mistaken for an unauthorized canonical write; isolated Docker workers retain their declared parallelism. The outer worker count and elapsed deadline are bounded, while native engines' internal provider request counts are not enforceable by this runtime.
+Muse uses its own `muse login` flow or existing `META_API_KEY`; its CLI reports a private native cache at `~/.config/muse/auth.json`. OpenCode owns its configured provider credentials (`opencode auth list` shows provider names without keys); use its ordinary provider login/configuration. A model listed by OpenCode can still require a separate account. For example, `meta/muse-spark-1.3` requires a configured Meta provider, while a free default model is a different choice. Accounts belong to the selected machine: a login on one host does not establish a login on another host. Do not copy credential caches between hosts as part of kit activation.
+
+Native execution uses those existing sessions on the selected host. It requires explicit host execution permission and provides no OS filesystem confinement or credential confinement. The explicit host grant permits native tool use, including reads and tests during review. A reviewer that changes its snapshot is refused by post-execution integrity checks. Review snapshots and canonical byte checks observe changes; they are not a sandbox. Native workers execute and publish serially so a peer publication cannot be mistaken for an unauthorized canonical write; isolated Docker workers retain their declared parallelism. The outer worker count and elapsed deadline are bounded, while native engines' internal provider request counts are not enforceable by this runtime. Operator pauses consume the run deadline; an exhausted or failed trial must remain recorded, and a new trial requires a fresh request and controller.
 
 Create a separate bootstrap directory and install the kit through npm so its exact runtime dependencies resolve normally. This directory must be outside the application workspace and private controller. If the GitHub repository requires access, use your normal Git/GitHub authentication; provider login is a separate concern.
 
@@ -48,6 +50,8 @@ npx flow-agents kit run aidlc --dest /path/to/installation \
   --request request.json --controller-root /private/path/controller
 ```
 
+For OpenCode, use `--engine opencode --model PROVIDER/MODEL --auth native` with an exact model identifier reported by `opencode models` and credentials for that provider. For example, `meta/muse-spark-1.3` requires the Meta provider; listing the model does not establish access. For the standalone Muse CLI, use `--engine muse --model muse-spark-1.3 --auth native`. These native profiles use their own login rather than a Datum auth reference. Verify model availability with the installed engine before creating the request.
+
 Read each actual pending questionnaire, summary, review and command subject. The installed kit's `node scripts/cli.mjs decisions` and `decide` commands retain explicit, signed operator interactions. Use that installed script's absolute path, the current pending file and an operator reference. Supply typed answers through `--disposition`; closed control choices require their exact declared strings. Resume the same unchanged request after deciding. Do not edit signed state or reset a failed trial.
 
 ## Datum provider setup
@@ -62,6 +66,6 @@ Install Docker and run `flow-agents kit prepare-worker --codex-version EXACT_VER
 
 The broker enforces cumulative provider requests for the run. OAuth renewal remains the native engine's responsibility. Doctor reports specific preflight checks; provider authorization and actual execution remain unverified until observed live.
 
-## Current qualification boundaries
+## Qualification boundaries
 
-Six CLI profiles are implemented: Codex, Claude, Kiro, Cursor, OpenCode and Copilot. Complete workflow qualification is recorded separately from engine smoke and configuration. Claude's expired OAuth, Cursor's unsigned session and Kiro's exhausted monthly quota remain explicitly unverified by operator direction. Native IDE interaction is a separate qualification. Do not interpret those states as verified parity.
+Seven CLI profiles are implemented: Codex, Claude, Kiro, Cursor, OpenCode, Copilot and Muse. Engine account availability, configuration success, and smoke responses are separate from complete workflow qualification. Record the selected engine, requested model, actual runtime evidence and any blocked account checks for each qualification. Native IDE interaction requires separate qualification.
