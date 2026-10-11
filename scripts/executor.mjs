@@ -84,8 +84,8 @@ export function createDockerExecutor({request,controllerRoot,workerRunner,signal
       const assertInputsCurrent=(root)=>{for(const [file,expected] of inputArtifacts){if(dispatch.phase!=='review'&&ownTargets.some(target=>target.path===file)&&!approvedInputs.has(file))continue;let actual;try{actual=readArtifact(root,file).digest;}catch{throw new Error('Worker removed or made an assigned input unreadable');}if(actual!==expected)throw new Error(approvedInputs.has(file)?'Worker changed approved plan/test instructions':'Worker changed an assigned read-only input');}};
       for(const diary of dispatch.context.learning_diaries??[]){const source=path.join(workspace,diary.path);if(fs.existsSync(source)){fs.mkdirSync(path.dirname(path.join(fork,diary.path)),{recursive:true});fs.copyFileSync(source,path.join(fork,diary.path));}}
       for(const local of ['.aidlc/state.md','.aidlc/project-description.json']){const source=path.join(workspace,local);if(fs.existsSync(source)){fs.mkdirSync(path.dirname(path.join(fork,local)),{recursive:true});fs.copyFileSync(source,path.join(fork,local));}}
-      const prompt=buildExecutionPrompt({dispatch,workspace,sourceDigest:before.source_digest});
-      prompt.instructions.push(`This invocation's exact output targets: ${JSON.stringify(targets)}. ${contribution?'Create only your own contribution file; other contributors are intentionally absent.':''}`);
+      const prompt=buildExecutionPrompt({dispatch,workspace,sourceDigest:before.source_digest,outputTargets:ownTargets});
+      prompt.instructions.push(`This invocation's exact writable output targets: ${JSON.stringify(dispatch.phase==='review'?[]:ownTargets.filter(ref=>!approvedInputs.has(ref.path)))}. ${contribution?'Create only your own contribution file; other contributors are intentionally absent.':''}`);
       prompt.allowed_source_changes=dispatch.phase!=='review'&&!contribution&&!dispatch.context.planning_only&&(dispatch.context.stage?.workspace_requires===true||typeof dispatch.context.source_write_authority==='string');
       const contextFile=path.join(workerRoot,'contexts',`${identity.instance_id}.json`);put(contextFile,prompt);
       let worker;
