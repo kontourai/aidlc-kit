@@ -4,7 +4,13 @@ This page lists the public command and module surface of `@kontourai/aidlc-kit`.
 
 ## kontour-aidlc CLI
 
-The package declares one binary, `kontour-aidlc` (`scripts/cli.mjs`). It is separate from the AWS `aidlc` command. Commands that need an argument throw a usage error when it is missing. Results are printed as JSON.
+The package declares one binary, `kontour-aidlc` (`scripts/cli.mjs`). It is separate from the AWS `aidlc` command. Results are printed as JSON.
+
+Exit codes:
+
+- `0`: the command succeeded. For `run`, the result status was `completed` or `waiting`.
+- `1`: the command ran and failed, or `run` returned any other status. Runtime errors are printed with their stack.
+- `2`: usage error. A required argument is missing or the command is unknown. The CLI prints `kontour-aidlc: <message>` and the usage line to stderr, without a stack trace, and does nothing else.
 
 | Command | Arguments | Effect |
 | --- | --- | --- |
