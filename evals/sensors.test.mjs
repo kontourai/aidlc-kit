@@ -107,6 +107,19 @@ test('confirmed sources, answers and exact accepted assumptions pass', async (t)
   const f = claimFixture(t); const result = check(await f.run(), 'claim-sources');
   assert.equal(result.status, 'pass', JSON.stringify(result));
 });
+test('known citations followed by spaced parenthetical prose remain visible source tags', async (t) => {
+  const f = claimFixture(t);
+  f.put(f.context.claims.questionsPath, `## Sources\n- [desc] Initial description: "Build a calendar"\n- [scope] Workflow-selected scope: \`feature\`.\n\n## Q1: Already-chosen scope [scope] (\`feature\`)\nThe scope [scope] (workflow-selected, already chosen).\nLiteral examples: \`<document>\` and \`aidlc/spaces/<active-space>/memory\`.\n[Answer]: Team members\n\n## Assumption Confirmation\n- [assumption] Users have an account.\n[Answer]: A. Accept assumptions`);
+  f.put('out/intent-statement.md', '## Intent\nBuild a calendar. [desc]\n\n## Initial Scope Signal\nFeature workflow. [scope] (already selected).\n\n## Assumptions & Open Questions\n- [assumption] Users have an account.');
+  assert.equal(check(await f.run(), 'claim-sources').status, 'pass');
+});
+test('adjacent citation links and real HTML or unknown labels still fail provenance', async (t) => {
+  for (const suffix of ['[scope](https://example.com)', '[scope](profile)', '[scope] [destination]', '<document>hidden</document>', '[unknown] (ordinary prose)']) {
+    const f = claimFixture(t);
+    f.put(f.context.claims.questionsPath, `## Sources\n- [desc] Initial description: "Build a calendar"\n- [scope] Workflow-selected scope: \`feature\`.\n\n## Q1: Users\n${suffix}\n[Answer]: Team members`);
+    assert.equal(check(await f.run(), 'claim-sources').status, 'fail', suffix);
+  }
+});
 test('fabricated citations and invisible tags fail provenance', async (t) => {
   for (const text of ['Invented user. [Q99]', 'Invented user. `[Q1]`', '<div hidden> [Q1] </div> Invented user.', 'Invented user. [Q1]\n\n[Q1]: https://example.com']) {
     const f = claimFixture(t); f.put('out/stakeholder-map.md', `## Stakeholders\n${text}\n\n## Assumptions & Open Questions\nNo open questions. [Q1]`);
