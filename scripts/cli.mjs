@@ -9,35 +9,39 @@ import {recordControllerInteraction} from './authority.mjs';
 import {readSnapshot,generatedFiles} from './compile.mjs';
 const [command,...args]=process.argv.slice(2);
 const get=name=>{const at=args.indexOf(name);return at<0?null:args[at+1];};
+const HELP='kontour-aidlc profiles | check | revise-input --request <original-request.json> --controller-root <private-root> --pending <current-signed-wait.json> --proposal <exact-input-revision.json> | recover-controller --controller-root <private-root> | recompose --request <original-kit-request.json> --controller-root <private-root> --proposal <pending-stage-delta.json> | run --request <kit-request.json> --controller-root <private-root> [--auth-file <host-auth.json>] | decisions --controller-root <private-root> | decide --controller-root <private-root> --pending <signed-pending.json> --reference <operator-reference>';
+// Usage errors are operator input mistakes, not faults: print the message without a stack and exit 2,
+// keeping exit 1 for commands that ran and failed.
+const usage=message=>{process.stderr.write(`kontour-aidlc: ${message}\n`);process.exit(2);};
 if(command==='run'){
  const requestFile=get('--request'),controllerRoot=get('--controller-root');
- if(!requestFile||!controllerRoot)throw new Error('Usage: kontour-aidlc run --request <kit-request.json> --controller-root <private-root> --auth-file <host-auth.json>');
+ if(!requestFile||!controllerRoot)usage('Usage: kontour-aidlc run --request <kit-request.json> --controller-root <private-root> [--auth-file <host-auth.json>]');
  const result=await executeRequestFile({requestFile,controllerRoot,authFile:get('--auth-file')});
  console.log(JSON.stringify(result));
  if(!['completed','waiting'].includes(result.status))process.exitCode=1;
 }else if(command==='recover-controller'){
- const controllerRoot=get('--controller-root');if(!controllerRoot)throw new Error('Usage: kontour-aidlc recover-controller --controller-root <private-root>');console.log(JSON.stringify(recoverControllerLock(controllerRoot)));
+ const controllerRoot=get('--controller-root');if(!controllerRoot)usage('Usage: kontour-aidlc recover-controller --controller-root <private-root>');console.log(JSON.stringify(recoverControllerLock(controllerRoot)));
 }else if(command==='revise-input'){
  const requestFile=get('--request'),controllerRoot=get('--controller-root'),pendingFile=get('--pending'),proposalFile=get('--proposal');
- if(!requestFile||!controllerRoot||!pendingFile||!proposalFile)throw new Error('Usage: kontour-aidlc revise-input --request <original-request.json> --controller-root <private-root> --pending <current-signed-wait.json> --proposal <exact-input-revision.json>');
+ if(!requestFile||!controllerRoot||!pendingFile||!proposalFile)usage('Usage: kontour-aidlc revise-input --request <original-request.json> --controller-root <private-root> --pending <current-signed-wait.json> --proposal <exact-input-revision.json>');
  console.log(JSON.stringify(await reviseInput({request:JSON.parse(fs.readFileSync(requestFile,'utf8')),controllerRoot,pendingFile,proposal:JSON.parse(fs.readFileSync(proposalFile,'utf8'))})));
 }else if(command==='recompose'){
  const requestFile=get('--request'),controllerRoot=get('--controller-root'),proposalFile=get('--proposal');
- if(!requestFile||!controllerRoot||!proposalFile)throw new Error('Usage: kontour-aidlc recompose --request <original-kit-request.json> --controller-root <private-root> --proposal <pending-stage-delta.json>');
+ if(!requestFile||!controllerRoot||!proposalFile)usage('Usage: kontour-aidlc recompose --request <original-kit-request.json> --controller-root <private-root> --proposal <pending-stage-delta.json>');
  console.log(JSON.stringify(await recomposeRun({request:JSON.parse(fs.readFileSync(requestFile,'utf8')),controllerRoot,proposal:JSON.parse(fs.readFileSync(proposalFile,'utf8'))})));
 }else if(command==='decisions'){
- const controllerRoot=get('--controller-root');if(!controllerRoot)throw new Error('Usage: kontour-aidlc decisions --controller-root <private-root>');
+ const controllerRoot=get('--controller-root');if(!controllerRoot)usage('Usage: kontour-aidlc decisions --controller-root <private-root>');
  const root=path.join(path.resolve(controllerRoot),'authority/pending');
  const pending=fs.existsSync(root)?fs.readdirSync(root).filter(file=>file.endsWith('.json')).map(file=>({file:path.join(root,file),...JSON.parse(fs.readFileSync(path.join(root,file),'utf8')).payload})):[];
  console.log(JSON.stringify(pending,null,2));
 }else if(command==='decide'){
  const controllerRoot=get('--controller-root'),pendingFile=get('--pending'),reference=get('--reference');
- if(!controllerRoot||!pendingFile||!reference)throw new Error('Usage: kontour-aidlc decide --controller-root <private-root> --pending <signed-pending.json> --reference <operator-reference> [--decision approve|deny] [--disposition <explicit-disposition.json>]');
+ if(!controllerRoot||!pendingFile||!reference)usage('Usage: kontour-aidlc decide --controller-root <private-root> --pending <signed-pending.json> --reference <operator-reference> [--decision approve|deny] [--disposition <explicit-disposition.json>]');
  const dispositionFile=get('--disposition'),disposition=dispositionFile?JSON.parse(fs.readFileSync(dispositionFile,'utf8')):undefined;
  console.log(JSON.stringify(await withControllerLock(controllerRoot,()=>recordControllerInteraction({controllerRoot,pendingFile,reference,disposition,decision:get('--decision')??'approve'}))));
 }else if(command==='profiles')console.log(JSON.stringify(Object.keys(readSnapshot().profiles)));
 else if(command==='check'){
  const {spawnSync}=await import('node:child_process');
  const result=spawnSync(process.execPath,[new URL('./compile.mjs',import.meta.url).pathname,'--check'],{stdio:'inherit'});process.exitCode=result.status??1;
-}else if(command==='--help'||command==='help'||!command)console.log('kontour-aidlc profiles | check | revise-input --request <original-request.json> --controller-root <private-root> --pending <current-signed-wait.json> --proposal <exact-input-revision.json> | recover-controller --controller-root <private-root> | recompose --request <original-kit-request.json> --controller-root <private-root> --proposal <pending-stage-delta.json> | run --request <kit-request.json> --controller-root <private-root> --auth-file <host-auth.json> | decisions --controller-root <private-root> | decide --controller-root <private-root> --pending <signed-pending.json> --reference <operator-reference>');
-else throw new Error(`Unknown command: ${command}`);
+}else if(command==='--help'||command==='help'||!command)console.log(HELP);
+else usage(`Unknown command: ${command}\nUsage: ${HELP}`);
