@@ -44,10 +44,10 @@ export function readPlanTestingContract(plan){
     if(line.trimEnd()==='## Testing Contract'){count++;if(start<0)start=index+1;continue;}
     if(start>=0&&end===raw.length&&/^## [^\n]*$/.test(line))end=index;
   }
-  if(count!==1)throw new Error('Plan requires exactly one real ## Testing Contract section');
+  if(count!==1)throw Object.assign(new Error('Plan requires exactly one real ## Testing Contract section'),{code:'model_output_shape'});
   const body=raw.slice(start,end).join('\n'),blocks=[...body.matchAll(/^ {0,3}```json[ \t]*\n([^]*?)^ {0,3}```[ \t]*$/gm)];
-  if(blocks.length!==1)throw new Error('Testing Contract requires exactly one JSON block');
-  let contract;try{contract=JSON.parse(blocks[0][1]);}catch{throw new Error('Testing Contract JSON malformed');}
+  if(blocks.length!==1)throw Object.assign(new Error('Testing Contract requires exactly one JSON block'),{code:'model_output_shape'});
+  let contract;try{contract=JSON.parse(blocks[0][1]);}catch{throw Object.assign(new Error('Testing Contract JSON malformed'),{code:'model_output_shape'});}
   if(!contract||typeof contract!=='object'||Array.isArray(contract)||contract.version!==1||!/^sha256:[a-f0-9]{64}$/.test(contract.contract_sha256??''))throw new Error('Testing Contract shape invalid');
   const {contract_sha256,...bodyContract}=contract;if(hashObject(bodyContract)!==contract_sha256)throw new Error('Testing Contract content fingerprint mismatch');
   return contract;

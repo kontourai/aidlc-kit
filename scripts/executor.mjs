@@ -127,10 +127,16 @@ export function createDockerExecutor({request,controllerRoot,workerRunner,signal
       // known-failed source or artifact bytes to the canonical workspace.
       if(response.status!=='completed')return {status:'failed',identity,identity_basis:'executor-observed',receipt,input_basis:dispatch.basis,artifacts:[],observation};
       if(dispatch.context.planning_only&&dispatch.context.testing_contract){
+        assertInputsCurrent(fork);
+        if(snapshotWorkspace(fork).source_digest!==before.source_digest)throw new Error('Planning worker changed implementation source');
+        if((dispatch.signal??signal)?.aborted)throw Object.assign(new Error('Execution cancelled'),{code:'cancelled'});
+        if(Date.now()-start>=request.execution.timeout_s*1000)throw Object.assign(new Error('Run execution budget exhausted'),{code:'execution_budget'});
+        for(const ref of response.artifacts)if(!ref||!safeRel(ref.path)||!ownTargets.some(target=>target.path===ref.path)&&!inputArtifacts.has(ref.path)&&!before.files.some(file=>file.path===ref.path))throw new Error('Worker returned artifacts outside assigned scope');
         const transforms=[];
+        const rejectOutput=error=>{observation.output_rejection={kind:'model-output-shape',code:error.code,message:error.message,stage:dispatch.stage,phase:dispatch.phase,source_digest:before.source_digest};receipt.digest=digest(observation);attempt.output_rejection={receipt:structuredClone(receipt),observation:structuredClone(observation)};persistHistory();return {status:'failed',identity,identity_basis:'executor-observed',receipt,input_basis:dispatch.basis,artifacts:[],observation,error:{kind:'model-output-shape',code:error.code,message:error.message}};};
         for(const target of targets.filter(ref=>ref.id==='code-generation-plan')){
           const prior=readArtifact(fork,target.path);if(!prior.text.trim())throw new Error('Code generation plan is empty before host contract rendering');
-          const stamped=stampTestingPlan(prior.text,{contract:dispatch.context.testing_contract,rendered:dispatch.context.testing_contract_rendered});
+          let stamped;try{stamped=stampTestingPlan(prior.text,{contract:dispatch.context.testing_contract,rendered:dispatch.context.testing_contract_rendered});}catch(error){if(error.code!=='model_output_shape')throw error;return rejectOutput(error);}
           if(stamped!==prior.text){fs.writeFileSync(path.join(fork,target.path),stamped);transforms.push({path:target.path,before:prior.digest,after:readArtifact(fork,target.path).digest,contract_digest:dispatch.context.testing_contract.contract_sha256});}
         }
         if(transforms.length){observation.host_testing_contract_rendering=transforms;receipt.digest=digest(observation);}
