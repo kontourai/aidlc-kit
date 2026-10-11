@@ -1,3 +1,4 @@
+import {validateOperatorConcerns} from './review-dispositions.mjs';
 import { createHash } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 
@@ -76,7 +77,7 @@ async function reviewFindings(result, previous, authorize) {
   }
   for (const finding of previous) if (!ids.has(finding.id)) fail('missing_disposition', `Prior finding ${finding.id} disappeared without reviewer disposition`);
   if (result.verdict === 'ready' && result.findings.some(finding => finding.status === 'open')) fail('invalid_review', 'Ready review contains unresolved findings');
-  return structuredClone(result.findings);
+  return result.findings.map(finding=>{const observed=structuredClone(finding);for(const key of ['origin','operator_reference','operator_receipt'])delete observed[key];return observed;});
 }
 
 /**
@@ -216,22 +217,22 @@ export async function dispatchStage({ stage, units, executor, context = {}, poli
           if (!executor.decide) return;
           const frozen = structuredClone(basis);
           if (!isDeepStrictEqual(await snapshot(unit, artifacts), frozen)) fail('stale_decision', 'Unit source/artifact basis changed before host decision');
-          const request = { kind, stage: stage.slug, unit: unit.id, basis: frozen, continuation_phase:record.continuation?.phase??null,max_review_revisions:reviewRevisionBudget,review_revisions:record.review_revisions??0,execution_receipts:record.receipts.map(observed=>structuredClone(observed.receipt)),review_receipts: record.reviews.map(review => structuredClone(review.receipt)), findings: structuredClone(record.findings), dissent: structuredClone(record.dissent) };
+          const request = { kind, stage: stage.slug, unit: unit.id, basis: frozen, continuation_phase:record.continuation?.phase??null,max_review_revisions:reviewRevisionBudget,review_revisions:record.review_revisions??0,execution_receipts:record.receipts.map(observed=>structuredClone(observed.receipt)),review_receipts: record.reviews.map(review => structuredClone(review.receipt)), findings: structuredClone(record.findings), operator_concerns:structuredClone(record.operator_concerns??[]), dissent: structuredClone(record.dissent) };
           const decision = await executor.decide(request);
           if (controller.signal.aborted) fail('cancelled', 'Dispatch cancelled during host decision');
           if (!isDeepStrictEqual(await snapshot(unit, artifacts), frozen)) fail('stale_decision', 'Unit source/artifact basis changed during host decision');
           record.decision = { kind, basis: frozen, response: structuredClone(decision ?? null) };
           (record.decisions ??= []).push(structuredClone(record.decision));
           if(decision?.authorized===true&&decision.decision==='request_changes'&&nonempty(decision.reference)){
-            const revision=decision.revision;if(record.continuation?.phase!=='review-decision'||kind!=='advisory_review'||!revision||revision.id!==unit.id||!Array.isArray(revision.finding_ids)||!revision.finding_ids.length||new Set(revision.finding_ids).size!==revision.finding_ids.length||revision.finding_ids.some(id=>!record.findings.some(finding=>finding.id===id&&finding.status==='open'))||!nonempty(revision.clarification)||revision.clarification.length>8192)fail('invalid_review_revision','Review request changes must bind this current unit and its open findings');
-            record.review_change_request=structuredClone({revision,reference:decision.reference});record.status='revision_requested';record.reason=null;
+            const revision=decision.revision;if(record.continuation?.phase!=='review-decision'||kind!=='advisory_review'||!revision||revision.id!==unit.id||!Array.isArray(revision.finding_ids)||(!revision.finding_ids.length&&!(revision.operator_concerns??[]).length)||new Set(revision.finding_ids).size!==revision.finding_ids.length||revision.finding_ids.some(id=>!record.findings.some(finding=>finding.id===id&&finding.status==='open'))||!nonempty(revision.clarification)||revision.clarification.length>8192)fail('invalid_review_revision','Review request changes must bind this current unit and its open findings');
+            try{validateOperatorConcerns(revision.operator_concerns??[],record);}catch(error){fail('invalid_review_revision',error.message);}record.review_change_request=structuredClone({revision,reference:decision.reference});record.status='revision_requested';record.reason=null;
           }
           if (decision?.authorized === true && decision.decision === 'accept' && nonempty(decision.reference)) {
             record.authority_reference = decision.reference;
             record.status = 'completed'; record.reason = null;
           }
         }
-        const request = (phase, role, extra = {}) => ({ phase, role, topology: stage.mode, iteration: 0, basis: structuredClone(basis), context: structuredClone(unitContext), prior_findings: structuredClone(record.findings), output_scope: phase === 'review' ? 'review-only' : 'stage-artifacts', ...extra });
+        const request = (phase, role, extra = {}) => ({ phase, role, topology: stage.mode, iteration: 0, basis: structuredClone(basis), context: structuredClone(unitContext), prior_findings: structuredClone([...record.findings,...(record.operator_concerns??[]).filter(concern=>!record.findings.some(finding=>finding.id===concern.id))]), output_scope: phase === 'review' ? 'review-only' : 'stage-artifacts', ...extra });
         async function author(phase, role, extra) {
           const result = await execute(request(phase, role, extra), record);
           authorIdentities.push(result.identity); artifacts = result.artifacts;
@@ -243,6 +244,7 @@ export async function dispatchStage({ stage, units, executor, context = {}, poli
         async function reviseRequestedReview(){
           const requested=record.review_change_request;if(!requested)fail('invalid_review_revision','Missing authorized revision request');record.review_revisions=(record.review_revisions??0)+1;if(record.review_revisions>reviewRevisionBudget)fail('review_revision_budget','Operator review revision budget exhausted');
           (record.phase_authorizations??=[]).push(structuredClone(record.decision));delete record.authority_reference;delete record.continuation;delete record.review_change_request;record.status='running';record.reason=null;
+          if(requested.revision.operator_concerns?.length){record.operator_concerns??=[];record.operator_concerns.push(...requested.revision.operator_concerns.map(concern=>({...structuredClone(concern),status:'open',origin:'operator',operator_reference:requested.reference,operator_receipt:structuredClone(requested.revision.receipt)})));}
           unitContext={...unitContext,operator_review_revision:{...requested.revision,reference:requested.reference}};
           record.review_revision_history??=[];record.review_revision_history.push({request:structuredClone(requested),prior_basis:structuredClone(basis),prior_review_receipts:record.reviews.map(review=>structuredClone(review.receipt)),revision:record.review_revisions});
           await author('revise',stage.lead_agent,{iteration:record.review_revisions,findings:structuredClone(record.findings),context:structuredClone(unitContext),operator_authority:requested.reference});
@@ -332,7 +334,8 @@ export async function dispatchStage({ stage, units, executor, context = {}, poli
             if(record.reviews.some(previous=>previous.identity.instance_id===review.identity.instance_id))fail('reviewer_not_independent','Reviewer reuses a previous observed review instance');
             if (authorIdentities.some(identity => actorKey(identity) === actorKey(review.identity) || identity.instance_id === review.identity.instance_id)) fail('reviewer_not_independent', 'Reviewer shares an author execution principal or instance');
             if (!isDeepStrictEqual(review.basis, frozen) || !isDeepStrictEqual(await snapshot(unit, artifacts), frozen)) fail('stale_review', 'Reviewed source/artifact basis changed during review');
-            record.findings = await reviewFindings(review, record.findings, executor.authorizeFinding ? finding => executor.authorizeFinding({stage: stage.slug, unit: unit.id, finding, basis: frozen, review_receipt: review.receipt, reviewer_identity: review.identity}) : null);
+            record.findings = await reviewFindings(review, [...record.findings,...(record.operator_concerns??[]).filter(concern=>!record.findings.some(finding=>finding.id===concern.id))], executor.authorizeFinding ? finding => executor.authorizeFinding({stage: stage.slug, unit: unit.id, finding, basis: frozen, review_receipt: review.receipt, reviewer_identity: review.identity}) : null);
+            for(const finding of record.findings){const concern=record.operator_concerns?.find(value=>value.id===finding.id);if(concern)Object.assign(finding,{origin:'operator',operator_reference:concern.operator_reference,operator_receipt:concern.operator_receipt});}
             record.reviews.push({ iteration, verdict: review.verdict, identity: review.identity, receipt: review.receipt, basis: frozen, findings: structuredClone(record.findings) });
             if (stage.review_class === 'advisory') { record.continuation={phase:'review-decision'};record.status = 'awaiting_decision'; record.reason = 'advisory_review'; break; }
             if (review.verdict === 'ready') break;

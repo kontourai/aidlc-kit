@@ -79,6 +79,8 @@ export async function refreshArtifactValidity({controllerRoot,runId,workspace,re
 }
 
 
+export function currentOutputInventory(historical,current){return [...historical.filter(ref=>!current.some(target=>target.stage===ref.stage&&target.id===ref.id&&target.path===ref.path&&(target.unit??null)===(ref.unit??null))),...current];}
+
 export function stageContext(snapshot,profile,stage,workspace,allArtifacts,request){
   const upstreamArtifacts={};for(const entry of allArtifacts){try{readArtifact(workspace,entry.path);(upstreamArtifacts[entry.id]??=[]).push(entry.path);}catch{}}
   return {upstreamArtifacts,writeSensorPolicy:request.parameters?.write_sensor_policy,commands:request.parameters?.commands??{},claims:{statePath:'.aidlc/state.md',descriptionPath:'.aidlc/project-description.json',questionsPath:artifactPaths(stage).find(a=>a.id==='intent-capture-questions')?.path,memoryPaths:request.parameters?.memory_paths??{}},profile,projectType:request.parameters?.project_type??'brownfield'};
@@ -165,7 +167,7 @@ async function runAidlcUnlocked({request,executor,commandRunner,authority,contro
     const run=await loadRun(request.run_id,controllerRoot);if(run.state.status==='completed'){failure=null;break;}
     if(run.state.status!=='active'){failure={reason:run.state.status==='paused'?'authority_required':'canonical_run_inactive',stage:run.state.current_step,status:run.state.status};break;}
     const stageId=run.state.current_step;if(!stageIds.includes(stageId)){failure={reason:'invalid_cursor',stage:stageId};break;}
-    const retained=records.find(record=>record.stage===stageId&&!record.invalidated&&['pass','disabled'].includes(record.sensors?.status));
+    const retained=records.find(record=>record.stage===stageId&&!record.invalidated&&record.artifact_observation?.structural_status==='pass'&&['pass','disabled'].includes(record.sensors?.status));
     if(retained){await evaluateRun(request.run_id,{cwd:controllerRoot});continue;}
     const original=snapshot.stages.find(s=>s.slug===stageId);const stage=effectiveStage(original,settings);
     if(!executionSlice&&!units&&stage.phase==='construction'&&stage.for_each){
@@ -217,7 +219,7 @@ async function runAidlcUnlocked({request,executor,commandRunner,authority,contro
     const allArtifacts=[...(executionSlice?.initialArtifacts??[]),...records.filter(record=>!record.invalidated).flatMap(record=>record.artifacts??[])];let artifacts=artifactPaths(stage);
     if(stage.for_each)artifacts=units.flatMap(unit=>artifactPaths(stage,unit.id));
     fs.writeFileSync(path.join(workspace,'.aidlc/state.md'),`# AI-DLC State\n\n## Project\n- **Project**: ${request.prompt.replace(/\n/g,' ')}\n- **Project Description Source**: project-description.json\n- **Scope**: ${testing.contract.scope}\n- **Profile**: ${profile}\n- **Depth**: ${defaults.depth??'unspecified'}\n- **Test Strategy**: ${testing.contract.test_strategy}\n- **Project Type**: ${projectType}\n- **Current Stage**: ${stageId}\n${(executionSlice?.checkpointPolicy??checkpointPolicy).enabled?'- **Construction Checkpoints**: enabled\n- **Construction Iteration**: unit-major\n- **Construction Execution**: serial\n':''}`);
-    let context={shared:{task:request.prompt,operator_input_revisions:operatorInputRevisions,profile,defaults:settings,testing_contract:testing.contract,testing_contract_rendered:testing.rendered,testing_policy_basis:testing.policy_basis,construction_checkpoint_policy:{enabled:(executionSlice?.checkpointPolicy??checkpointPolicy).enabled,iteration:'unit-major',execution:'serial'},workspace:'/workspace',stage,artifact_targets:artifacts,upstream_artifacts:allArtifacts,permissions:request.parameters?.permissions??{},plan_approval:'unapproved',prior_check_failures:records.find(record=>record.stage===stageId)?.sensors?.checks??[]},units:{}};
+    let context={shared:{task:request.prompt,operator_input_revisions:operatorInputRevisions,profile,defaults:settings,testing_contract:testing.contract,testing_contract_rendered:testing.rendered,testing_policy_basis:testing.policy_basis,construction_checkpoint_policy:{enabled:(executionSlice?.checkpointPolicy??checkpointPolicy).enabled,iteration:'unit-major',execution:'serial'},workspace:'/workspace',stage,artifact_targets:artifacts,upstream_artifacts:allArtifacts,permissions:request.parameters?.permissions??{},plan_approval:'unapproved',prior_check_failures:(records.find(record=>record.stage===stageId)?.sensors?.checks??[]).filter(check=>!['pass','not_applicable','disabled'].includes(check.status)),prior_structural_findings:records.find(record=>record.stage===stageId)?.artifact_observation?.findings??[]},units:{}};
     if(settings.learnings==='on'){
       const diaries=(stage.for_each?units:[{id:'stage'}]).map(unit=>({id:'memory',stage:stageId,unit:unit.id==='stage'?null:unit.id,path:`.aidlc/artifacts/${stageId}${unit.id==='stage'?'':`/${unit.id}`}/memory.md`}));
       for(const diary of diaries){fs.mkdirSync(path.dirname(path.join(workspace,diary.path)),{recursive:true});if(!fs.existsSync(path.join(workspace,diary.path)))fs.writeFileSync(path.join(workspace,diary.path),'# Stage Learnings\n\n## Observations\n\n## Decisions\n\n## Follow-up\n');}
@@ -379,14 +381,15 @@ async function runAidlcUnlocked({request,executor,commandRunner,authority,contro
       if(!grant?.authorized||authority.verify?.(grant.receipt,input)!==true){failure={stage:stageId,reason:'authority_required',detail:grant};await refuse(stageId,failure);break;}
     }
     let observation;
-    if(stage.for_each){const perUnit=units.map(unit=>observeStage({snapshot:executionSlice?.observationSnapshot??selectedSnapshot,profile,stage:stageId,root:workspace,artifacts:[...allArtifacts.filter(a=>!a.unit||a.unit===unit.id),...resolved.filter(a=>a.unit===unit.id)],projectType}));observation={...perUnit[0],inputs:perUnit.flatMap(o=>o.inputs),outputs:perUnit.flatMap(o=>o.outputs),findings:perUnit.flatMap(o=>o.findings),structural_status:perUnit.every(o=>o.structural_status==='pass')?'pass':'fail'};}
-    else observation=observeStage({snapshot:executionSlice?.observationSnapshot??selectedSnapshot,profile,stage:stageId,root:workspace,artifacts:[...allArtifacts,...resolved],projectType});
-    const sensorContext=stageContext(snapshot,profile,stage,workspace,allArtifacts,request);
+    if(stage.for_each){const perUnit=units.map(unit=>observeStage({snapshot:executionSlice?.observationSnapshot??selectedSnapshot,profile,stage:stageId,root:workspace,artifacts:currentOutputInventory(allArtifacts.filter(a=>!a.unit||a.unit===unit.id),resolved.filter(a=>a.unit===unit.id)),projectType}));observation={...perUnit[0],inputs:perUnit.flatMap(o=>o.inputs),outputs:perUnit.flatMap(o=>o.outputs),findings:perUnit.flatMap(o=>o.findings),structural_status:perUnit.every(o=>o.structural_status==='pass')?'pass':'fail'};}
+    else observation=observeStage({snapshot:executionSlice?.observationSnapshot??selectedSnapshot,profile,stage:stageId,root:workspace,artifacts:currentOutputInventory(allArtifacts,resolved),projectType});
+    const sensorInventory=currentOutputInventory(allArtifacts,resolved);
+    const sensorContext=stageContext(snapshot,profile,stage,workspace,sensorInventory,request);
     sensorContext.skippedStages=snapshot.stages.map(stage=>stage.slug).filter(id=>!stageIds.includes(id));
     sensorContext.codeArtifacts=[...new Set(dispatched.units.flatMap(unit=>(unit.receipts??[]).flatMap(receipt=>receipt.changed_source??[])))].flatMap(file=>{try{return [{path:file,digest:readArtifact(workspace,file).digest}];}catch{return [];}});
     let sensors;
     if(settings.sensors==='off') sensors={status:'disabled',policy:'explicit-ceremony-setting',checks:[]};
-    else if(stage.for_each){const results=await Promise.all(units.map(unit=>runStageSensors({stage:original,workspace,artifacts:resolved.filter(a=>a.unit===unit.id),context:{...stageContext(snapshot,profile,stage,workspace,allArtifacts.filter(a=>!a.unit||a.unit===unit.id),request),skippedStages:sensorContext.skippedStages,codeArtifacts:sensorContext.codeArtifacts,unit:unit.id},commandRunner})));sensors={status:results.every(r=>r.status==='pass')?'pass':results.some(r=>r.status==='fail')?'fail':'not_verified',checks:results.flatMap((r,i)=>r.checks.map(check=>({...check,unit:units[i].id})))};}
+    else if(stage.for_each){const results=await Promise.all(units.map(unit=>runStageSensors({stage:original,workspace,artifacts:resolved.filter(a=>a.unit===unit.id),context:{...stageContext(snapshot,profile,stage,workspace,sensorInventory.filter(a=>!a.unit||a.unit===unit.id),request),skippedStages:sensorContext.skippedStages,codeArtifacts:sensorContext.codeArtifacts,unit:unit.id},commandRunner})));sensors={status:results.every(r=>r.status==='pass')?'pass':results.some(r=>r.status==='fail')?'fail':'not_verified',checks:results.flatMap((r,i)=>r.checks.map(check=>({...check,unit:units[i].id})))};}
     else sensors=await runStageSensors({stage:original,workspace,artifacts:resolved,context:sensorContext,commandRunner});
     const tests=[];
     if(stageId==='build-and-test'){
