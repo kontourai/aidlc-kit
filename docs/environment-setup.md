@@ -54,6 +54,8 @@ For OpenCode, use `--engine opencode --model PROVIDER/MODEL --auth native` with 
 
 Read each actual pending questionnaire, summary, review and command subject. The installed kit's `node scripts/cli.mjs decisions` and `decide` commands retain explicit, signed operator interactions. Use that installed script's absolute path, the current pending file and an operator reference. Supply typed answers through `--disposition`; closed control choices require their exact declared strings. Questionnaire cells may use bare `[Answer]:` tags or Markdown list prefixes (`-`, `*`, `+`, or ordered `1.` / `1)`). The signed subject retains question text and list prefixes, and unsupported answer-marker syntax is refused rather than treated as an answered questionnaire. Resume the same unchanged request after deciding. Do not edit signed state or reset a failed trial.
 
+For a later change to an accepted observed public input at an actual stopped wait, use [signed input revisions](input-revisions.md). Do not edit retained receipts or approved question files to simulate an operator revision.
+
 ## Datum provider setup
 
 Datum owns portable provider metadata and references to secrets in environment variables, macOS Keychain or 1Password. An existing configured model can be selected with `--provider model@provider`; a private JSON auth reference can be supplied with `--auth-ref`. Materialization happens on the host. Never put a raw key in a request, project or chat. Station can supply host bindings and connections, but is optional for this standalone CLI path.

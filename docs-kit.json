@@ -13,6 +13,7 @@
     { "source": "docs/questionnaire-replies.md", "section": "Guides" },
     { "source": "docs/review-revisions.md", "section": "Guides" },
     { "source": "docs/recomposition.md", "section": "Guides" },
+    { "source": "docs/input-revisions.md", "section": "Guides" },
     { "source": "docs/reference.md", "section": "Reference", "covers": ["scripts/cli.mjs"] },
     { "source": "docs/docker-worker-adapter.md", "section": "Reference" }
   ],
@@ -31,6 +32,7 @@
     { "id": "questionnaire-replies", "title": "Answer questionnaires through the operator inbox", "source": "docs/questionnaire-replies.md" },
     { "id": "review-revisions", "title": "Request changes after review and recover a controller lock", "source": "docs/review-revisions.md" },
     { "id": "recomposition", "title": "Change pending stages in a running workflow", "source": "docs/recomposition.md" },
+    { "id": "input-revisions", "title": "Revise observed public inputs at a signed wait", "source": "docs/input-revisions.md" },
     { "id": "cli", "title": "kontour-aidlc CLI commands", "source": "docs/reference.md#kontour-aidlc-cli" }
   ],
   "exclude": []
