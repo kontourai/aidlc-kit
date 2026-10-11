@@ -4,7 +4,7 @@ AWS AI-DLC's pinned 33-stage methodology and 11 profiles, expressed through Kont
 
 The current implementation reproduces profile selection and stage contracts, provides agent stage skills, fingerprints artifact inputs/outputs, projects dependency invalidation, and tests real published Flow/Surface gate behavior. Full AWS runtime equivalence and generated-output effectiveness remain unverified; [parity.json](parity.json) is the explicit capability ledger.
 
-Delivery is tracked by [Flow Agents #1439](https://github.com/kontourai/flow-agents/issues/1439) under [Ops #173](https://github.com/kontourai/ops/issues/173). The program's runtime and output-quality exit criteria remain distinct from this reference's contract tests.
+Delivery is tracked by [Flow Agents #1439](https://github.com/kontourai/flow-agents/issues/1439). The program's runtime and output-quality exit criteria remain distinct from this reference's contract tests.
 
 From this kit repository:
 
