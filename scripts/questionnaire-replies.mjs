@@ -11,17 +11,23 @@ import {verifyControllerCheckpoint,decisionBindingDigest} from './authority.mjs'
 const must=(value,message)=>{if(!value)throw new Error(message);};
 const read=file=>JSON.parse(fs.readFileSync(file,'utf8'));
 
+// Bare tags and explicit Markdown list items share one byte-preserving grammar.
+const answerLine=/^([ \t]*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+)?\[Answer\]:)([ \t]*)(.*)$/;
+const answerLikeLine=/^[ \t]*(?:(?:[-*+|#]|\d+[.)])[ \t]*)*(?:[*_]+|<[^>]*>)*\[answer\]/i;
+function parseAnswerLine(line){const match=answerLine.exec(line);must(match||!answerLikeLine.test(line),'Unsupported questionnaire answer cell syntax');return match;}
+const transformAnswerLines=(text,transform)=>text.replace(/[^\r\n]+/g,line=>{const match=parseAnswerLine(line);return match?transform(match):line;});
+
 /** Stable answer cells are a document contract, never inferred answers. */
 export function questionnaireCells(text){
  must(typeof text==='string'&&Buffer.byteLength(text)<=262144,'Questionnaire exceeds bounded document size');
- const cells=[];let heading='';for(const line of text.split(/\r?\n/)){if(/^#{1,6}\s/.test(line))heading=line.replace(/^#{1,6}\s+/,'');const match=/^[ \t]*\[Answer\]:[ \t]*(.*)$/.exec(line);if(match)cells.push({id:`answer-${cells.length+1}`,heading,value:match[1]});}
+ const cells=[];let heading='';for(const line of text.split(/\r?\n/)){if(/^#{1,6}\s/.test(line))heading=line.replace(/^#{1,6}\s+/,'');const match=parseAnswerLine(line);if(match)cells.push({id:`answer-${cells.length+1}`,heading,value:match[3]});}
  must(cells.length<=128,'Questionnaire exceeds bounded answer inventory');return cells;
 }
-export function questionnaireContract(text){return text.replace(/^([ \t]*\[Answer\]:)[ \t]*[^\r\n]*/gm,'$1');}
+export function questionnaireContract(text){questionnaireCells(text);return transformAnswerLines(text,match=>match[1]);}
 const explicitAnswer=value=>typeof value==='string'&&value.trim()&&value.length<=4096&&!/[\r\n\u0000]/.test(value)&&!/^\s*(?:_+|\[answer\]|<answer>)\s*$/i.test(value);
 export function fillQuestionnaire(text,answers,confirmed={}){
  const cells=questionnaireCells(text),keys=Object.keys(answers??{}),required=cells.filter(cell=>!Object.hasOwn(confirmed,cell.id));must(answers&&typeof answers==='object'&&!Array.isArray(answers)&&required.every(cell=>keys.includes(cell.id))&&keys.every(key=>cells.some(cell=>cell.id===key)),'Questionnaire reply must answer the exact cell inventory');
- let index=0;return text.replace(/^([ \t]*\[Answer\]:)[ \t]*[^\r\n]*/gm,(_line,prefix)=>{const cell=cells[index++],answer=answers[cell.id]??confirmed[cell.id];must(!Object.hasOwn(confirmed,cell.id)||answer===confirmed[cell.id],'Reply changed previously confirmed answer cells');must(explicitAnswer(answer),'Explicit bounded questionnaire answer required');return `${prefix} ${answer}`;});
+ let index=0;return transformAnswerLines(text,match=>{const prefix=match[1];const cell=cells[index++],answer=answers[cell.id]??confirmed[cell.id];must(!Object.hasOwn(confirmed,cell.id)||answer===confirmed[cell.id],'Reply changed previously confirmed answer cells');must(explicitAnswer(answer),'Explicit bounded questionnaire answer required');return `${prefix} ${answer}`;});
 }
 export function questionnaireSubject({workspace,basis,producer,checkpointBinding,admission}){
  createPublicationJail(workspace).preflight(basis.map(ref=>ref.path));
@@ -41,9 +47,9 @@ function questionnaireChoiceConstraints(document){
  return constraints;
 }
 export function validateQuestionnaireChoices(document,text,submittedAnswers){
- const constraints=questionnaireChoiceConstraints(document),cells=questionnaireCells(text),lines=text.split(/\r?\n/).filter(line=>/^[ \t]*\[Answer\]:/.test(line));
+ const constraints=questionnaireChoiceConstraints(document),cells=questionnaireCells(text),lines=text.split(/\r?\n/).map(parseAnswerLine).filter(Boolean);
  for(const [id,constraint]of Object.entries(constraints)){
-  const cell=cells.find(cell=>cell.id===id),index=cells.findIndex(cell=>cell.id===id),line=lines[index],raw=/^[ \t]*\[Answer\]:(.*)$/.exec(line??'')?.[1],canonicalRaw=raw?.startsWith(' ')?raw.slice(1):raw;
+  const cell=cells.find(cell=>cell.id===id),index=cells.findIndex(cell=>cell.id===id),line=lines[index],raw=line?line[2]+line[3]:undefined,canonicalRaw=raw?.startsWith(' ')?raw.slice(1):raw;
   must(cell&&constraint.values.includes(cell.value)&&constraint.values.includes(canonicalRaw)&&(!submittedAnswers||!Object.hasOwn(submittedAnswers,id)||constraint.values.includes(submittedAnswers[id])),`Invalid declared choice for ${id} (${cell?.heading??id})`);
  }
 }

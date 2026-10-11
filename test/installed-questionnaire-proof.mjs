@@ -21,8 +21,8 @@ const fs=require('fs'),path=require('path'),{randomUUID}=require('crypto');
 const input=JSON.parse(fs.readFileSync(0,'utf8')),nonce=randomUUID();
 if(input.phase==='review'){
  const questions=fs.readFileSync(input.questionFile,'utf8');
- const answers=questions.match(/^\[Answer\]:\s*\S.*$/gm)||[];
- if(answers.length<input.initialCells||/^\[Answer\]:\s*$/m.test(questions))throw Error('Reviewer observed unanswered question cells');
+ const answers=questions.match(/^(?:- )?\[Answer\]:\s*\S.*$/gm)||[];
+ if(answers.length<input.initialCells||/^(?:- )?\[Answer\]:\s*$/m.test(questions))throw Error('Reviewer observed unanswered question cells');
  for(const file of input.outputs){const text=fs.readFileSync(file,'utf8');if(input.revised&&!text.includes('Actual operator follow-up answer'))throw Error('Revised artifacts omitted actual input');if(!input.revised&&!text.includes('[assumption]'))throw Error('Acceptance erased unresolved assumption label');}
  process.stdout.write(JSON.stringify({nonce,verdict:'ready'}));
 }else{
@@ -31,7 +31,7 @@ if(input.phase==='review'){
   let text;
   if(input.summary){
    const headings=input.initialCells===16?['Response Mode',...Array.from({length:12},(_,i)=>'Q'+(i+1)+'. Explicit fixture question '+(i+1)), 'Assumption Confirmation','Summary Confirmation','Operator Learnings']:['Q1. Explicit local fixture scope?','Summary Confirmation'];
-   text='# Observed questionnaire '+nonce+'\n\n'+headings.map(h=>'## '+h+'\n\n[Answer]:\n').join('\n');
+   text='# Observed questionnaire '+nonce+'\n\n'+headings.map(h=>'## '+h+'\n\n- [Answer]:\n').join('\n');
   }else{
    if(!input.reply?.documents?.every(doc=>doc.answers.every(answer=>answer.value.trim())))throw Error('Author has no actual completed operator reply');
    const followups=input.reply.documents.flatMap(doc=>doc.answers).filter(answer=>/^Q1[34]\./.test(answer.heading));

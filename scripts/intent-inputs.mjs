@@ -4,7 +4,7 @@ import {questionnaireSubject,materializeQuestionnaireReply,questionnaireContract
 import {sealControllerCheckpoint,verifyControllerCheckpoint} from './authority.mjs';import {createPublicationJail} from './publication.mjs';
 const section=(text,heading)=>{const lines=text.split(/\r?\n/),at=lines.findIndex(line=>line.trim()===`## ${heading}`);if(at<0)return null;const end=lines.slice(at+1).findIndex(line=>/^## /.test(line));return lines.slice(at+1,end<0?undefined:at+1+end).join('\n').trim();};
 const replace=(text,heading,body)=>{const lines=text.split(/\r?\n/),at=lines.findIndex(line=>line.trim()===`## ${heading}`);if(at<0)return text.trimEnd()+`\n\n## ${heading}\n\n${body}\n`;let end=at+1;while(end<lines.length&&!/^## /.test(lines[end]))end++;return [...lines.slice(0,at+1),'',body,'',...lines.slice(end)].join('\n');};
-const assumptionQuote=text=>text.split(/\r?\n/).map(line=>/^\s*(?:#{1,6}\s|\[Answer\]:)/.test(line)?`> ${line}`:line).join('\n');
+const assumptionQuote=text=>text.split(/\r?\n/).map(line=>(/^\s*#{1,6}\s/.test(line)||questionnaireCells(line).length>0)?`> ${line}`:line).join('\n');
 const quote=text=>text.split(/\r?\n/).map(line=>`> ${line}`).join('\n');
 const store=(file,value)=>{fs.mkdirSync(path.dirname(file),{recursive:true,mode:0o700});const tmp=`${file}.${randomUUID()}.tmp`;fs.writeFileSync(tmp,JSON.stringify(value)+'\n',{flag:'wx',mode:0o600});fs.renameSync(tmp,file);};
 /** Pinned intent-capture Step 5 belongs to the standalone methodology kit.
