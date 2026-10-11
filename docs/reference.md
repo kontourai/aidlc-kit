@@ -38,10 +38,10 @@ Each command's contract is described in its guide:
 | `@kontourai/aidlc-kit` | `scripts/runtime.mjs` | `runAidlc`, `snapshotWorkspace`, `artifactPaths`, `attachObservation`, `refreshArtifactValidity`, `refreshAndPersistArtifactValidity`, `currentOutputInventory`, `stageContext`, `restoreUnits` |
 | `@kontourai/aidlc-kit/run` | `scripts/run.mjs` | `executeRequestFile`, `executeKit`, `runAidlc` |
 | `@kontourai/aidlc-kit/executor` | `scripts/executor.mjs` | `createDockerExecutor` |
-| `@kontourai/aidlc-kit/compile` | `scripts/compile.mjs` | `compileProfile`, `readSnapshot`, `generatedFiles`, `writeGenerated`, `requestBindingValue`, `requestBindingDigest`, `digest`, `KIT_ROOT` |
+| `@kontourai/aidlc-kit/compile` | `scripts/compile.mjs` | `compileProfile`, `readSnapshot`, `generatedFiles`, `shippedDocs`, `writeGenerated`, `requestBindingValue`, `requestBindingDigest`, `digest`, `KIT_ROOT` |
 | `@kontourai/aidlc-kit/kit.json` | `kit.json` | The generated kit manifest. |
 
-`kit.json` declares the standard execution entry as `executeRequestFile` in `scripts/run.mjs`, with contract `kontour.kit.execution_request@1.0`. See [Standard kit execution entry](docker-worker-adapter.md).
+`kit.json` declares the standard execution entry as `executeRequestFile` in `scripts/run.mjs`, with contract `kontour.kit.execution_request@1.0`. Its `docs` list is every `.md` and `.json` file the package ships under `docs/`, sorted, so a new guide is advertised once it is added and the manifest is regenerated; `npm run check` fails until it is. See [Standard kit execution entry](docker-worker-adapter.md).
 
 ## Repository scripts
 
