@@ -14,6 +14,7 @@ The package declares one binary, `kontour-aidlc` (`scripts/cli.mjs`). It is sepa
 | `decisions` | `--controller-root <private-root>` | Lists signed pending inputs under `<private-root>/authority/pending/`, each with its file path. |
 | `decide` | `--controller-root <private-root> --pending <signed-pending.json> --reference <operator-reference> [--decision approve\|deny] [--disposition <file.json>]` | Records an operator interaction against one pending input, under the controller lock. `--decision` defaults to `approve`. |
 | `recompose` | `--request <original-kit-request.json> --controller-root <private-root> --proposal <pending-stage-delta.json>` | Proposes, or applies once approved, a change to the pending stages of a stopped run. |
+| `revise-input` | `--request <original-request.json> --controller-root <private-root> --pending <current-signed-wait.json> --proposal <exact-input-revision.json>` | Proposes, or applies once explicitly approved, one exact revision to an accepted observed public input at a settled wait, retaining original requests, budgets and receipts. |
 | `recover-controller` | `--controller-root <private-root>` | Removes a stale controller lock when its recorded owner is proven dead. |
 | `help` | none | Prints a one-line usage summary. Running with no command does the same. |
 
@@ -22,12 +23,13 @@ Each command's contract is described in its guide:
 - `decide --disposition` with questionnaire answers: [questionnaire replies](questionnaire-replies.md).
 - `decide --disposition` with review corrections, and `recover-controller`: [review revisions](review-revisions.md).
 - `recompose`: [recomposition](recomposition.md).
+- `revise-input`: [signed input revisions](input-revisions.md).
 
 ## Package exports
 
 | Export | Module | Named exports |
 | --- | --- | --- |
-| `@kontourai/aidlc-kit` | `scripts/runtime.mjs` | `runAidlc`, `snapshotWorkspace`, `artifactPaths`, `attachObservation`, `refreshArtifactValidity`, `stageContext`, `restoreUnits` |
+| `@kontourai/aidlc-kit` | `scripts/runtime.mjs` | `runAidlc`, `snapshotWorkspace`, `artifactPaths`, `attachObservation`, `refreshArtifactValidity`, `refreshAndPersistArtifactValidity`, `stageContext`, `restoreUnits` |
 | `@kontourai/aidlc-kit/run` | `scripts/run.mjs` | `executeRequestFile`, `executeKit`, `runAidlc` |
 | `@kontourai/aidlc-kit/executor` | `scripts/executor.mjs` | `createDockerExecutor` |
 | `@kontourai/aidlc-kit/compile` | `scripts/compile.mjs` | `compileProfile`, `readSnapshot`, `generatedFiles`, `writeGenerated`, `requestBindingValue`, `requestBindingDigest`, `digest`, `KIT_ROOT` |
