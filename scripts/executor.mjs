@@ -49,7 +49,7 @@ export function createDockerExecutor({request,controllerRoot,workerRunner,signal
   const budget=()=>{if(signal?.aborted)throw Object.assign(new Error('Execution cancelled'),{code:'cancelled'});if(turns>=request.execution.max_turns||Date.now()-start>=request.execution.timeout_s*1000)throw Object.assign(new Error('Run execution budget exhausted'),{code:'execution_budget'});};
   const executor={
     get maxParallel(){return request.host_setup?.isolation==='trusted-host'?1:16;},
-    get observed(){return observed;},get turnsStarted(){return turns;},get remainingMs(){return Math.max(0,request.execution.timeout_s*1000-(Date.now()-start));},get hasUnobservedStarts(){return history.starts.some(attempt=>!attempt.worker);},
+    get observed(){return observed;},get turnsStarted(){return history.starts.filter(attempt=>Number.isFinite(attempt.worker_started_at)||attempt.worker).length;},get attemptsStarted(){return turns;},get remainingMs(){return Math.max(0,request.execution.timeout_s*1000-(Date.now()-start));},get hasUnobservedStarts(){return history.starts.some(attempt=>!attempt.worker);},
     async admit(dispatch){
       const file=path.join(controllerRoot,'admissions',`${dispatch.request_digest}.json`);
       let identity;
@@ -91,7 +91,9 @@ export function createDockerExecutor({request,controllerRoot,workerRunner,signal
         inputLineage.push({prior:structuredClone(ref),current:{...ref,digest:current.digest},author_receipt:proof.publication.checkpoint.receipt,publication:proof.publication});
         return {...ref,digest:current.digest};
       });
-      const priorArtifacts=[...upstreamArtifacts,...(dispatch.context.approved_plan_basis??[]),...(dispatch.context.approved_summary_basis??[]),...(dispatch.reviewed_artifacts??[]),...(dispatch.revised_artifacts??[]),...(dispatch.upstream??[]).flatMap(value=>value.artifacts??[]),...(dispatch.draft?.artifacts??[]),...(dispatch.contributions??dispatch.positions??[]).flatMap(value=>value.artifacts??[])];
+      const dependencyArtifacts=(dispatch.context.dependencies??[]).flatMap(dependency=>dependency.artifacts??[]);
+      if(dependencyArtifacts.some(ref=>!ref||typeof ref.digest!=='string'||!/^[a-f0-9]{64}$/.test(ref.digest)))throw new Error('Dependency artifact lacks exact host-observed digest');
+      const priorArtifacts=[...upstreamArtifacts,...dependencyArtifacts,...(dispatch.context.approved_plan_basis??[]),...(dispatch.context.approved_summary_basis??[]),...(dispatch.reviewed_artifacts??[]),...(dispatch.revised_artifacts??[]),...(dispatch.upstream??[]).flatMap(value=>value.artifacts??[]),...(dispatch.draft?.artifacts??[]),...(dispatch.contributions??dispatch.positions??[]).flatMap(value=>value.artifacts??[])];
       const inputArtifacts=new Map();
       for(const ref of priorArtifacts){if(!safeRel(ref.path))throw new Error('Invalid artifact input path');try{const observed=readArtifact(workspace,ref.path);if(ref.digest!==undefined&&ref.digest!==observed.digest)throw new Error('Artifact input basis changed before worker copy');inputArtifacts.set(ref.path,observed.digest);const dest=path.join(fork,ref.path);fs.mkdirSync(path.dirname(dest),{recursive:true});fs.copyFileSync(path.join(workspace,ref.path),dest);}catch(error){if(error.code!=='ENOENT'||ref.digest!==undefined||approvedInputs.has(ref.path)||ref.optional!==true)throw error;}}
       const assertInputsCurrent=(root)=>{for(const [file,expected] of inputArtifacts){if(dispatch.phase!=='review'&&ownTargets.some(target=>target.path===file)&&!approvedInputs.has(file))continue;let actual;try{actual=readArtifact(root,file).digest;}catch{throw new Error('Worker removed or made an assigned input unreadable');}if(actual!==expected)throw new Error(approvedInputs.has(file)?'Worker changed approved plan/test instructions':'Worker changed an assigned read-only input');}};
@@ -103,6 +105,7 @@ export function createDockerExecutor({request,controllerRoot,workerRunner,signal
       prompt.allowed_source_changes=dispatch.phase!=='review'&&!contribution&&!dispatch.context.planning_only&&(dispatch.context.stage?.workspace_requires===true||typeof dispatch.context.source_write_authority==='string');
       const contextFile=path.join(workerRoot,'contexts',`${identity.instance_id}.json`);put(contextFile,prompt);
       let worker;
+      attempt.worker_started_at=Date.now();persistHistory();
       try{worker=await workerRunner({image:config.image,ownerId:config.owner_id,forbiddenMountRoots:config.forbidden_mount_roots,workspace:fork,sourceRoot:request.source_root,contextFile,providerProxy:config.providerProxy,model:request.execution.model,reasoningEffort:request.execution.reasoning_effort,
         timeoutMs:Math.max(1,request.execution.timeout_s*1000-(Date.now()-start)),network:config.network??'bridge',readOnlyWorkspace:dispatch.phase==='review',artifactRoot:config.artifact_root,storageBudget:config.storage_budget,signal:dispatch.signal??signal,invocationId:identity.instance_id,runId:request.run_id});}
       catch(error){attempt.status='port-failed';attempt.error=error.message;persistHistory();throw error;}
@@ -186,7 +189,7 @@ export function createDockerExecutor({request,controllerRoot,workerRunner,signal
         for(const ref of returned){const payload=payloads.get(ref.path);publication.write(ref.path,payload.bytes,payload.mode);}
       };
       const applied=merge.then(apply);merge=applied.catch(()=>{});await applied;
-      const publicationCheckpoint={stage:dispatch.stage,unit:dispatch.unit,invocation_id:identity.instance_id,request_digest:dispatch.request_digest,receipt:structuredClone(receipt),artifacts:returned.map(ref=>({path:ref.path,digest:ref.digest})),source_digest:snapshotWorkspace(workspace).source_digest};
+      const publicationCheckpoint={before_source_digest:before.source_digest,stage:dispatch.stage,unit:dispatch.unit,invocation_id:identity.instance_id,request_digest:dispatch.request_digest,receipt:structuredClone(receipt),artifacts:returned.map(ref=>({path:ref.path,digest:ref.digest})),source_digest:snapshotWorkspace(workspace).source_digest};
       attempt.publication={checkpoint:publicationCheckpoint,envelope:sealControllerCheckpoint({controllerRoot,checkpoint:publicationCheckpoint})};persistHistory();
       return {status:response.status,identity,identity_basis:'executor-observed',receipt,input_basis:dispatch.basis,artifacts:returned.map(ref=>({path:ref.path,digest:ref.digest})),observation,changed_source:changed,...(contribution?{objections:response.objections??[],role:dispatch.role}:{})};
     }

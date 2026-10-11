@@ -1,0 +1,29 @@
+import fs from 'node:fs';import path from 'node:path';
+import {digest,requestBindingDigest} from './compile.mjs';import {snapshotWorkspace} from './workspace.mjs';import {checkpointRetryIdentity} from './dispatch-checkpoints.mjs';import {sealControllerCheckpoint,verifyControllerCheckpoint} from './authority.mjs';
+const must=(condition,message)=>{if(!condition)throw new Error(message);},read=file=>JSON.parse(fs.readFileSync(file,'utf8'));
+export function sameArtifactIdentity(ref,target){return ref.stage===target.stage&&ref.id===target.id&&ref.path===target.path&&(ref.unit??null)===(target.unit??null);}
+export function stageInputScope(artifacts,targets,unit){return artifacts.filter(ref=>(!unit||!ref.unit||ref.unit===unit)&&!targets.some(target=>(!unit||target.unit===unit)&&sameArtifactIdentity(ref,target)));}
+function failureObservation({controllerRoot,stage,run,sourceDigest}){
+ const outcome=run.state.gate_outcomes?.find(outcome=>outcome.gate_id===`${stage}-gate`);if(!outcome||outcome.status==='pass')return null;
+ const refs=new Set(outcome.evidence_refs??[]),root=fs.realpathSync(path.join(controllerRoot,'observations'));
+ for(const entry of [...run.manifest.evidence].reverse()){
+  if(entry.gate_id!==`${stage}-gate`||!refs.has(entry.id)||entry.kind!=='trust.bundle')continue;
+  const bundle=entry.bundle;if(bundle?.events?.some(event=>event.type==='invalidation'))continue;const claim=bundle?.claims?.find(claim=>claim.id===`${stage}-completion`&&claim.value===false);if(!claim)continue;
+  const file=entry.original_path?.replace(/\.json$/,'.record.json');must(typeof file==='string'&&fs.realpathSync(path.dirname(file))===root&&!fs.lstatSync(file).isSymbolicLink(),'Repair observation custody changed');
+  const record=read(file);must(record.stage===stage&&digest(record)===claim.metadata?.record_digest,'Repair observation digest changed');
+  const recordSource=record.artifact_observation?.source_digest??record.dispatch?.units?.[0]?.basis?.source_digest;
+  if(recordSource&&recordSource!==sourceDigest){const historyFile=path.join(controllerRoot,'executor-history.json');must(fs.existsSync(historyFile),'Repair source basis changed without observed author publication');const saved=read(historyFile);must(saved.digest===digest(saved.history),'Repair author publication history changed');const proof=saved.history.starts?.findLast(start=>start.publication?.checkpoint.stage===stage&&start.publication.checkpoint.before_source_digest===recordSource&&start.publication.checkpoint.source_digest===sourceDigest&&start.publication.checkpoint.invocation_id===start.invocation_id&&start.publication.checkpoint.request_digest===start.request_digest&&start.publication.checkpoint.receipt.request_digest===start.request_digest&&start.publication.checkpoint.receipt.id===start.invocation_id&&Number.isFinite(start.worker_started_at)&&start.worker&&Number.isInteger(start.worker.terminal?.status)&&start.worker.terminal.status===0&&verifyControllerCheckpoint({controllerRoot,checkpoint:start.publication.checkpoint,envelope:start.publication.envelope}));must(proof,'Repair source basis changed without current signed author publication');}
+  return {evidence_id:entry.id,record_file:fs.realpathSync(file),record_digest:digest(record),record};
+ }
+ return null;
+}
+function verifyRecord(observation,stage){if(!observation)return;const stat=fs.lstatSync(observation.record_file);must(stat.isFile()&&!stat.isSymbolicLink(),'Repair record custody changed');const record=read(observation.record_file);must(record.stage===stage&&digest(record)===observation.record_digest,'Repair diagnostic observation changed');}
+/** Stable facts from actual canonical failed evidence, never a waiting-record
+ * projection. A different gate visit/source basis gets a distinct checkpoint. */
+export function retainedRepairContext({controllerRoot,request,run,stage,targets}){
+ const binding={request_digest:requestBindingDigest(request),run_id:request.run_id,stage,source_digest:snapshotWorkspace(request.workspace).source_digest,admission:checkpointRetryIdentity(run)},id=digest(binding),file=path.join(controllerRoot,'repair-contexts',stage,`${id}.json`);
+ if(fs.existsSync(file)){const saved=read(file);must(verifyControllerCheckpoint({controllerRoot,checkpoint:saved.checkpoint,envelope:saved.envelope})&&digest(saved.checkpoint.binding)===id,'Repair context signature or visit changed');verifyRecord(saved.checkpoint.observation,stage);return structuredClone(saved.checkpoint.context);}
+ const observed=failureObservation({controllerRoot,stage,run,sourceDigest:binding.source_digest});if(!observed)return {prior_check_failures:[],prior_structural_findings:[],prior_stage_outputs:[]};
+ const context={prior_check_failures:(observed.record.sensors?.checks??[]).filter(check=>!['pass','not_applicable','disabled'].includes(check.status)),prior_structural_findings:observed.record.artifact_observation?.findings??[],prior_stage_outputs:(observed.record.artifacts??[]).filter(ref=>targets.some(target=>sameArtifactIdentity(ref,target))),prior_rejection:{evidence_id:observed.evidence_id,record_digest:observed.record_digest,stage}};
+ const checkpoint={binding,observation:{evidence_id:observed.evidence_id,record_file:observed.record_file,record_digest:observed.record_digest},context};fs.mkdirSync(path.dirname(file),{recursive:true,mode:0o700});fs.writeFileSync(file,JSON.stringify({checkpoint,envelope:sealControllerCheckpoint({controllerRoot,checkpoint})})+'\n',{flag:'wx',mode:0o600});return structuredClone(context);
+}
