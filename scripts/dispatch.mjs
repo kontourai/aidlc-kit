@@ -194,7 +194,7 @@ export async function dispatchStage({ stage, units, executor, context = {}, poli
         if (!replayed && executor.saveReceipt) { await executor.saveReceipt(structuredClone(frozen), result); observed.persisted = true; }
         await executor.journal?.({ kind: 'execution_observed', stage: stage.slug, unit: record.id, request_digest: frozen.request_digest, receipt: result.receipt, replayed });
         if (controller.signal.aborted || result.status === 'cancelled') fail('cancelled', 'Execution was cancelled');
-        if (result.status !== 'completed') fail('execution_failed', `Execution ${result.receipt.id} did not complete`);
+        if (result.status !== 'completed') fail(result.observation?.output_rejection?.kind==='model-output-shape'?'model_output_rejected':'execution_failed',result.observation?.output_rejection?.kind==='model-output-shape'?result.observation.output_rejection.message:`Execution ${result.receipt.id} did not complete`);
         return result;
       } finally { globalSlots.delete(slot); releaseSlot(); }
     }
