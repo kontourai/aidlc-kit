@@ -46,3 +46,25 @@ test('unknown normative core and linked documentation references fail closed',()
  assert.throws(()=>documentReferences('See [standard](missing-standard.md).','docs/reference/example.md',[protocol]),/Unresolved static/);
  assert.throws(()=>documentReferences('Read missing-standard.md.','docs/reference/example.md',[protocol]),/Unresolved static/);
 });
+
+test('observed worker mutation of pinned support retains evidence and refuses publication',async t=>{
+ const sourceRoot=copiedReferences(t),file=path.join(sourceRoot,'upstream/references',protocol),original=fs.readFileSync(file);
+ const workspace=path.join(sourceRoot,'workspace'),controllerRoot=path.join(sourceRoot,'controller');fs.mkdirSync(workspace);fs.mkdirSync(controllerRoot);
+ const target={id:'mockup',stage:'rough-mockups',unit:null,path:'.aidlc/artifacts/rough-mockups/mockup.md'};
+ const request={workspace,source_root:sourceRoot,run_id:'reference-post-worker',execution:{max_turns:2,timeout_s:30,model:'fixture'},engine_sandbox:{image:`sha256:${'a'.repeat(64)}`,artifact_root:path.join(sourceRoot,'receipts')}};
+ let calls=0;
+ const workerRunner=async options=>{
+  calls++;const context=JSON.parse(fs.readFileSync(options.contextFile,'utf8'));
+  assert.ok(context.methodology_references.source_paths.includes(protocol));
+  const output=path.join(options.workspace,target.path);fs.mkdirSync(path.dirname(output),{recursive:true});fs.writeFileSync(output,'otherwise valid observed output\n');
+  fs.appendFileSync(file,'unauthorized reference mutation\n');
+  return {observed:{context_digest:'observed-fixture-context'},provider_thread_id:'observed-fixture-thread',terminal:{status:0,timeout:false,overflow:false},container_removed:true,usage:{complete:false},final:JSON.stringify({status:'completed',artifacts:[{path:target.path}]})};
+ };
+ const executor=createDockerExecutor({request,controllerRoot,workerRunner});
+ const dispatch={request_digest:'reference-post-worker-request',stage:'rough-mockups',unit:'stage',role:'aidlc-design-agent',phase:'inline',context:{profile:'feature',stage:readSnapshot().stages.find(x=>x.slug==='rough-mockups'),artifact_targets:[target]},basis:await executor.snapshotBasis({})};dispatch.expected_identity=await executor.admit(dispatch);
+ try{await assert.rejects(executor.execute(dispatch),/Pinned methodology reference missing or changed/);}finally{fs.writeFileSync(file,original);}
+ assert.equal(calls,1);assert.equal(executor.turnsStarted,1);assert.equal(executor.observed.length,1);assert.equal(executor.observed[0].provider_thread_id,'observed-fixture-thread');
+ const saved=JSON.parse(fs.readFileSync(path.join(controllerRoot,'executor-history.json'))).history.starts[0];
+ assert.equal(saved.status,'observed');assert.equal(saved.worker.terminal.status,0);assert.equal(saved.worker.provider_thread_id,'observed-fixture-thread');assert.equal(saved.publication,undefined);
+ assert.equal(fs.existsSync(path.join(workspace,target.path)),false);assert.equal(await executor.loadReceipt(dispatch),null);verifyReferenceClosure(sourceRoot);
+});
