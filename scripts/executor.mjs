@@ -14,7 +14,7 @@ import {createPublicationJail} from './publication.mjs';
 const json=file=>JSON.parse(fs.readFileSync(file,'utf8'));
 const put=(file,value)=>{fs.mkdirSync(path.dirname(file),{recursive:true,mode:0o700});fs.writeFileSync(file,JSON.stringify(value,null,2)+'\n',{flag:'wx',mode:0o600});};
 const replace=(file,value)=>{const temp=`${file}.${randomUUID()}.tmp`;put(temp,value);fs.renameSync(temp,file);};
-const normalizedResult=text=>{const raw=text?.trim().replace(/^```(?:json)?\s*\n/,'').replace(/\n```$/,'');const value=JSON.parse(raw);if(!value||!['completed','failed'].includes(value.status)||!Array.isArray(value.artifacts)||value.artifacts.length>512)throw new Error('Worker final response violates execution schema');for(const forbidden of ['receipt','identity','authorized','gate_status'])if(Object.hasOwn(value,forbidden))throw new Error(`Model cannot supply ${forbidden}`);return value;};
+const normalizedResult=text=>{const raw=text?.trim().replace(/^```(?:json)?\s*\n/,'').replace(/\n```$/,'');let value;try{value=JSON.parse(raw);}catch(error){throw Object.assign(error,{code:'model_output_shape'});}if(!value||!['completed','failed'].includes(value.status)||!Array.isArray(value.artifacts)||value.artifacts.length>512)throw Object.assign(new Error('Worker final response violates execution schema'),{code:'model_output_shape'});for(const forbidden of ['receipt','identity','authorized','gate_status'])if(Object.hasOwn(value,forbidden))throw new Error(`Model cannot supply ${forbidden}`);return value;};
 const safeRel=(file)=>typeof file==='string'&&file.length>0&&!path.isAbsolute(file)&&!file.split(/[\\/]/).some(p=>p==='..');
 const inside=(root,file)=>{const rel=path.relative(root,file);return rel!=='..'&&!rel.startsWith(`..${path.sep}`)&&!path.isAbsolute(rel);};
 function artifactInventory(workspace){
@@ -127,7 +127,8 @@ export function createDockerExecutor({request,controllerRoot,workerRunner,signal
       const native=request.host_setup?.isolation==='trusted-host';
       const custody=native?worker.observed.execution_profile==='host-native'&&worker.observed.engine===request.execution.engine&&worker.engine_outcome==='completed':worker.container_removed===true;
       if(worker.terminal.status!==0||worker.terminal.timeout||worker.terminal.overflow||worker.terminal.cancelled||!worker.provider_thread_id||!custody)return {status:'failed',identity,identity_basis:'executor-observed',receipt,input_basis:dispatch.basis,artifacts:[],observation};
-      const response=normalizedResult(worker.final);
+      const rejectOutput=error=>{observation.output_rejection={kind:'model-output-shape',code:error.code,message:error.message,stage:dispatch.stage,phase:dispatch.phase,source_digest:before.source_digest};receipt.digest=digest(observation);attempt.output_rejection={receipt:structuredClone(receipt),observation:structuredClone(observation)};persistHistory();return {status:'failed',identity,identity_basis:'executor-observed',receipt,input_basis:dispatch.basis,artifacts:[],observation,error:{kind:'model-output-shape',code:error.code,message:error.message}};};
+      let response;try{response=normalizedResult(worker.final);}catch(error){if(error.code!=='model_output_shape')throw error;return rejectOutput(error);}
       // A successful provider process is not successful work. Preserve the
       // private fork for host diagnostics, but publish none of a worker's
       // known-failed source or artifact bytes to the canonical workspace.
@@ -139,7 +140,6 @@ export function createDockerExecutor({request,controllerRoot,workerRunner,signal
         if(Date.now()-start>=request.execution.timeout_s*1000)throw Object.assign(new Error('Run execution budget exhausted'),{code:'execution_budget'});
         for(const ref of response.artifacts)if(!ref||!safeRel(ref.path)||!ownTargets.some(target=>target.path===ref.path)&&!inputArtifacts.has(ref.path)&&!before.files.some(file=>file.path===ref.path))throw new Error('Worker returned artifacts outside assigned scope');
         const transforms=[];
-        const rejectOutput=error=>{observation.output_rejection={kind:'model-output-shape',code:error.code,message:error.message,stage:dispatch.stage,phase:dispatch.phase,source_digest:before.source_digest};receipt.digest=digest(observation);attempt.output_rejection={receipt:structuredClone(receipt),observation:structuredClone(observation)};persistHistory();return {status:'failed',identity,identity_basis:'executor-observed',receipt,input_basis:dispatch.basis,artifacts:[],observation,error:{kind:'model-output-shape',code:error.code,message:error.message}};};
         for(const target of targets.filter(ref=>ref.id==='code-generation-plan')){
           const prior=readArtifact(fork,target.path);if(!prior.text.trim())throw new Error('Code generation plan is empty before host contract rendering');
           let stamped;try{stamped=stampTestingPlan(prior.text,{contract:dispatch.context.testing_contract,rendered:dispatch.context.testing_contract_rendered});}catch(error){if(error.code!=='model_output_shape')throw error;return rejectOutput(error);}
