@@ -1,0 +1,207 @@
+# AI-DLC on opencode
+
+The opencode runtime is one of the framework's harness distributions, for the
+open-source **opencode** harness (opencode.ai). One deterministic core, many
+harnesses: the engine, state machine, audit log, graph, swarm referee, and
+learnings gate are byte-identical across every distribution — only the shell
+differs. The source/development tree is **generated** into ignored local
+`dist/opencode/` from `core/` + `harness/opencode/` by
+`bun scripts/package.ts opencode`; never hand-edit it.
+
+Harness-specific onboarding lives in `.aidlc/onboarding.md`, loaded by the
+`instructions` list in `opencode.json`. The root `AGENTS.md` block is
+harness-neutral and shared with other installed harnesses whose engine
+directories differ; opencode and Copilot cannot share one `.aidlc/` install.
+
+## Layout: two dot-dirs, on purpose
+
+opencode auto-imports every `*.ts` under `.opencode/tools/` and
+`.opencode/tool/` as custom tool definitions, and importing a CLI-style engine
+script (top-level dispatch, `process.exit`) crashes the session
+(live-reproduced on opencode 1.17.18). So this distribution splits:
+
+- **`.aidlc/`** — the AIDLC engine tree (tools, hooks, skills, agents,
+  knowledge, scopes, sensors, aidlc-common). opencode never scans it; the
+  shipped `opencode.json` registers `skills.paths: [".aidlc/skills"]` so the
+  orchestrator skill and every generated runner are discovered there.
+- **`.opencode/`** — only natively-consumed surfaces: the 14 persona
+  subagents (`agents/*.md`, `mode: subagent`), the `/aidlc` command
+  (`command/aidlc.md`), and the hook-adapter plugin
+  (`plugin/aidlc-opencode-adapter.ts`, auto-discovered by opencode).
+
+## Prerequisites
+
+- **opencode ≥ 1.17** — the plugin hook surface this install relies on
+  (`tool.execute.before`, `tool.execute.after`, `chat.message`, `session.idle`,
+  `experimental.session.compacting`) and project-local skill/agent discovery.
+  Check with `opencode --version`.
+- **bun** only when generating or running the source/development `dist/`
+  projection. Native installs and versioned release runtimes dispatch through
+  the installed `aidlc` executable.
+- **A model provider** — the shipped project `opencode.json` and agent
+  definitions pin no model. Your global opencode config supplies the provider
+  and session model; balanced reviewers retain only their medium reasoning
+  variant.
+
+## Install
+
+### Native channel (recommended)
+
+```bash
+tmp="$(mktemp -d)"
+curl -fsSL \
+  https://github.com/awslabs/aidlc-workflows/releases/latest/download/install.sh \
+  -o "$tmp/install.sh"
+sh "$tmp/install.sh"
+rm -rf "$tmp"
+cd your-project
+aidlc config
+aidlc doctor
+opencode
+```
+
+The installer verifies the release metadata, executable, and all-harness runtime archive against the published SHA-256 checksums. The installed runtime does not require Bun, Node.js, or Git. Harness selection happens in `aidlc config`.
+
+On Windows, download `install.ps1` and run
+`& $installer`. See [Windows installation](../18-install-and-lifecycle.md#windows-powershell)
+for account scope, automatic User PATH registration, and `-NoModifyPath`.
+For an air-gapped package, use
+`install.sh --from <release-directory> --offline` on Unix or
+`& $installer -From <release-directory> -Offline` on Windows.
+
+`aidlc config` projects `.aidlc/`, `.opencode/`, the workspace shell,
+`AGENTS.md`, the managed `.gitignore` block, and AI-DLC's entries in
+`opencode.json`. Those entries discover the skill and method files and allow
+direct `aidlc engine *` commands; other shell commands still prompt. A
+project that already has an `opencode.json` keeps its model, provider,
+instructions, permission rules, and comments: AI-DLC adds only its own
+entries, and leaves a permission map's `"*"` rule to you when you set one. Start opencode in the project and
+run `/aidlc --doctor`, then `/aidlc` followed by what you want to build.
+
+### Versioned manual-copy alternative
+
+Download and extract a specific release's `aidlc-copy-runtime-X.Y.Z.tar.gz` as described in
+[Install and Lifecycle: Copy Channel](../18-install-and-lifecycle.md#copy-channel),
+then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
+
+1. Copy the distribution into your project:
+
+   ```bash
+   cp -r "$RUNTIME_ROOT/opencode/.aidlc/"    your-project/.aidlc/
+   cp -r "$RUNTIME_ROOT/opencode/.opencode/" your-project/.opencode/
+   cp -r "$RUNTIME_ROOT/opencode/aidlc/"     your-project/aidlc/      # the workspace shell — a sibling of .aidlc/, not inside it
+   ```
+
+   The copy runtime has no `opencode.json`, so copying never replaces yours.
+   Step 2 adds AI-DLC's three load-bearing parts to it, or writes the file
+   when there is none: `skills.paths` (skill discovery from `.aidlc/skills`),
+   `instructions` (both native onboarding at `.aidlc/onboarding.md` and the
+   method glob `aidlc/active-memory/**/*.md`, the engine's git-ignored
+   copy of the active space's method that `/aidlc space <name>` rewrites), and
+   permission rules for AIDLC bash entrypoints plus edits under
+   `.aidlc/tools/` and `.aidlc/hooks/`. If you keep an `opencode.jsonc`
+   instead, step 2 adds those parts to it, comments kept, and creates no
+   `opencode.json` beside it.
+   The adapter enforces the permission boundary: the target must be an entrypoint
+   embedded from the packaged tree, invoked as one direct command with no
+   chaining, redirection, expansion, or command substitution. Engine-code edits
+   prompt for approval.
+
+2. Run the copy's own setup once, from the project:
+
+   ```bash
+   bun .aidlc/tools/aidlc.ts config --from "$RUNTIME_ROOT" --harness opencode
+   ```
+
+   It adds AI-DLC's lines to your `AGENTS.md` and `.gitignore`, after
+   everything already there, and AI-DLC's entries to your `opencode.json`
+   (or creates them), before your first workflow
+   (per-clone audit shards are committed deliberately; cursors and
+   machine-local runtime stay ignored).
+
+3. Start opencode in the project and run `/aidlc --doctor`, then `/aidlc`
+   followed by what you want to build.
+
+Because opencode has no channel for the session-start hook's injected context,
+the `/aidlc` skill performs one read-only status probe on a bare invocation. An
+existing workflow carries on where it stopped, as with `/aidlc --resume` (ask
+to redo, jump to a stage, or start fresh to do something else);
+`/aidlc --resume` skips the probe and continues directly.
+
+The versioned runtime uses the native `aidlc` command. Framework developers who
+need the Bun-shaped projection can clone the repository, run
+`bun install --frozen-lockfile` and `bun scripts/package.ts`, then use the
+ignored local `dist/opencode/` output.
+
+## Refresh and version skew
+
+`aidlc update` updates the machine runtime without rewriting projects.
+`aidlc doctor` reports a project stamp that differs from the selected engine.
+Between workflows, preview and apply a refresh:
+
+```bash
+aidlc config --dry-run
+aidlc config
+```
+
+Config preserves managed root blocks and user-owned files, and reports local
+framework edits as conflicts. In `opencode.json`, a refresh updates only the
+entries AI-DLC wrote that nobody changed; your own entries, and any AI-DLC
+entry you edited, stay as they are.
+A refresh while a workflow is open is done, like a settings change (`config
+models`, `flags`, `providers`), and says your open work carries on.
+Upgrade and rollback remain safe during a workflow because they do not touch
+the project.
+
+## What's different on this harness
+
+- **Questions render as numbered prose options** (no structured-question
+  widget); the questions FILE with `[Answer]:` tags remains the source of
+  truth.
+- **Hooks ride the adapter plugin.** opencode has no hooks.json/settings hook
+  registry; `.opencode/plugin/aidlc-opencode-adapter.ts` maps opencode's
+  plugin hook moments onto the core hook bodies in `.aidlc/hooks/` (run as bun
+  subprocesses): reviewer read-scope and the AIDLC bash boundary before tool
+  execution; audit + sensors on write/edit/apply_patch; rebuild-stage-graph on
+  bash, which also shows an engine error's exact message as a TUI toast;
+  statusline sync on todowrite; subagent logging on task; presence
+  minting on each human turn; state validation before compaction.
+- **Forwarding-loop enforcement is advisory.** The Stop seam is the
+  `session.idle` event — reactive, not blocking. When the core stop hook
+  answers `block`, the plugin re-engages the loop by injecting a nudge prompt
+  (marked with a sentinel so it never mints human presence). The nudge is a
+  synthetic part: the agent reads it, and your chat does not show it. When you
+  stop a turn with Esc, or reject a command the agent asked to run, no nudge
+  follows until you write again. A chatting or
+  pausing human is released by the hook's interactive cap.
+- **`/aidlc` shows what you typed.** opencode would show the command's whole
+  template as your message; the plugin keeps the template for the agent and
+  shows your `/aidlc ...` line instead.
+- **Personas are native subagents** (`mode: subagent`); the conductor adopts
+  them inline for most stages and delegates via the `task` tool for the two
+  subagent stages (2.1 reverse-engineering, 3.5 code-generation). Their native
+  permission map denies `task`, so delegated agents cannot delegate again.
+  Plugin composition emits the same `.opencode/agents/` twin for plugin personas.
+- **Space switches preserve JSONC.** `/aidlc space <name>` updates the method
+  glob in either `opencode.json` or `opencode.jsonc` without stripping comments
+  or trailing commas, and keeps explicit persona memory paths aligned.
+- **Construction swarm runs as task-tool fan-out only** (`AIDLC_USE_SWARM=1`
+  is a loud no-op — no Workflow tool exists).
+- **No session-end moment** — `SESSION_ENDED` audit events are not emitted.
+  Pre-compaction validation DOES fire (`experimental.session.compacting`).
+- **No statusline / welcome message** — use `/aidlc --status` and the progress
+  lines at gates.
+- **MCP servers**: none ship; configure your own under `mcp:` in
+  `opencode.json` if needed.
+
+## Verifying an install
+
+```bash
+aidlc doctor                               # native install
+bun .aidlc/tools/aidlc-utility.ts doctor   # source/development copy
+opencode run --command aidlc -- "--status"  # /aidlc --status through the harness
+```
+
+The doctor's opencode-specific checks: the adapter plugin present at
+`.opencode/plugin/`, a project-root `opencode.json` or `opencode.jsonc`
+present, and `.opencode/command/aidlc.md` present.

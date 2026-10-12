@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync, readdirSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {verifyReferenceClosure} from './reference-closure.mjs';
 
 export const KIT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 export const digest = (value) => createHash('sha256').update(typeof value === 'string' || Buffer.isBuffer(value) ? value : JSON.stringify(value)).digest('hex');
@@ -122,6 +123,7 @@ export function writeGenerated({ check = false, root = KIT_ROOT, snapshot = read
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const args = process.argv.slice(2);
   if (args.some((arg) => arg !== '--check')) throw new Error('Usage: node compile.mjs [--check]');
+  verifyReferenceClosure(KIT_ROOT);
   writeGenerated({ check: args.includes('--check') });
   console.log('AI-DLC generated kit contracts verified.');
 }

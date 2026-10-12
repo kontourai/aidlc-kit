@@ -138,3 +138,30 @@ Execution results distinguish `turns_started` (actual worker-runner launches, in
 Per-unit repair inputs apply the same exact identity retirement within that unit's existing visibility scope. Current declared dependency artifacts come from the dispatcher dependency outcome and are copied only with exact host-observed digests; stale, missing-digest or mutated peer inputs refuse work/publication. Learning diaries are declared before input/history projection, so a mutable current diary is not accidentally treated as an immutable old upstream file. Approved plan and questionnaire bases remain separately immutable.
 
 A completed worker process may still produce an invalid planning artifact. The specifically identified Testing Contract heading/JSON shape errors retain a failed host execution receipt with the actual admitted source and output-rejection diagnostic; no artifact or source is published. A later ordinary invocation follows the public canonical gate retry/visit and sees those signed diagnostics, requiring a new author execution and current independent review. The identical execution request cannot be automatically retried. Contract fingerprint/policy substitutions, immutable-input changes, unauthorized source/output paths, native canonical mutation, storage limits, cancellation, budget exhaustion and publication races remain hard custody failures; they are not reclassified as model-shape repair.
+
+## Pinned methodology references
+
+Stage and persona procedures are accompanied by the complete pinned common
+protocol/support library under `upstream/references/`. The provenance manifest
+binds each source path, exact byte hash and transitive links to the same AWS
+commit as the stage snapshot. It includes substantive standards such as the
+ASCII diagram rules; generated workspace memory, state and questions remain
+actual per-run inputs, never substituted with reference data.
+
+Ordinary author and distinct reviewer contexts receive the same compact
+reference index for their stage, roles and profile. Bodies stay in verified
+read-only source files rather than being duplicated in every prompt. Docker
+workers read the existing `/treatment` source mount; native workers receive
+the actual installed Kit path. The host validates the complete closure before
+a worker launches and again before publishing results. Native trusted-host
+execution still has no OS filesystem confinement; verification rejects changes
+and does not claim stronger confinement. Native engine commands in reference
+prose remain data and are translated through existing Flow-owned execution.
+
+Reference classification is reviewed for this exact pinned source, not a general
+parser for arbitrary future upstream documents. The manifest records each
+Markdown mention as shipped support, a declared runtime/project artifact, or
+an explicitly classified historical or illustrative example. Unknown normative
+core references and explicit static links refuse import; the pinned manifest
+hash prevents later source or classification changes from silently borrowing
+this qualification. A new upstream import requires review and qualification.

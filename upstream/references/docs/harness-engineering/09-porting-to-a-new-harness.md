@@ -1,0 +1,335 @@
+# Porting AI-DLC to a New Harness
+
+AI-DLC ships from **one core, many harnesses** — today Claude Code, Kiro CLI, Kiro IDE,
+Codex CLI, Cursor, opencode, and GitHub Copilot, and the set is open. The hand-authored source is a
+harness-neutral `core/` plus a thin `harness/<name>/` surface per CLI; the
+packager (`scripts/package.ts`) materializes each ignored local Bun copy tree
+under `dist/<harness>/` and its native counterpart under
+`dist-release/<harness>/`. Adding another harness is **one directory and one
+manifest row** — the engine, methodology, projection ownership, and
+harness-dir/rules resolution take no `core/` edits at all; the lone optional
+exception is a per-harness `--doctor` arm (see Step 2). This page walks the
+contract.
+
+> Three senses of "harness" in this repo: **`harness/`** (top-level — the
+> per-CLI distribution surfaces this page is about), **`docs/harness-engineering/`**
+> (this guide), and **`tests/harness/`** (the test-suite helper library).
+> Unrelated; only the first is a distribution.
+
+## The shape
+
+```
+core/                      # harness-neutral source — not edited to add a harness (save the optional --doctor arm)
+harness/
+  claude/  manifest.ts · skills/aidlc/ · onboarding.fills.ts · settings.json
+  kiro/    manifest.ts · skills/aidlc/ · agents/*.json · hooks/aidlc-kiro-adapter.ts · settings/cli.json · onboarding.fills.ts
+  codex/   manifest.ts · emit.ts · skills/aidlc/ · hooks/aidlc-codex-adapter.ts
+  opencode/ manifest.ts · emit.ts · skills/aidlc/ · command/ · plugin/
+  copilot/ manifest.ts · emit.ts · skills/aidlc/ · hooks/aidlc-copilot-adapter.ts
+scripts/
+  package.ts               # bun scripts/package.ts [<name>] [--check]
+  manifest-types.ts        # the HarnessManifest contract every manifest implements
+dist/<name>/               # GENERATED Bun-invocation channel
+dist-release/<name>/       # GENERATED native-aidlc channel
+```
+
+`core/` prose names the harness directory with `{{HARNESS_DIR}}`, calls the
+framework through `{{INVOKE}}`, and uses `{{TOOL_PREFIX}}` where a generated
+prefix is required. The packager substitutes the declared directory plus one of
+two invocation policies:
+
+| Channel | `{{INVOKE}}` | `{{TOOL_PREFIX}}` |
+|---------|--------------|-------------------|
+| `dist/` | `bun <harness-dir>/tools/aidlc.ts` | `bun <harness-dir>/tools/` |
+| `dist-release/` | `aidlc` | `aidlc ` |
+
+The transform applies to Markdown and structured command surfaces
+(`.json`/`.toml`/`.hook`), and to invocation tokens in TypeScript; it is not a
+general source rewrite. The runtime `harnessDir()` seam in
+`core/tools/aidlc-lib.ts` still derives the directory from the shipped layout
+(open-set: the tool's own path, not a hardcoded list), so the same authored tool
+sources run in every tree. The acceptance gate is **generator determinism**:
+`package.ts --check` builds both channels and every plugin projection twice in
+independent temporary roots, then byte-compares the complete outputs. It does
+not read local `dist/` or `dist-release/`.
+
+The packager **discovers** harnesses by scanning `harness/` for a `manifest.ts`,
+so a new dir is built by the default `bun scripts/package.ts` and `--check` with
+no edit to the packager itself — the literal meaning of "one directory and one
+manifest row, zero shared-code edits."
+
+## Step 1 — the manifest (the declarative 80%)
+
+Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
+(`scripts/manifest-types.ts`). The fields:
+
+- `name` / `harnessDir` — the dir the token substitutes to (e.g. `.foo`).
+- `productName` / `configNextStep` — user-facing projection metadata consumed by
+  lifecycle and `aidlc config`; keep host commands exact.
+- `firstRunSteps` / `editorTerminalApp` / `hookActivation` (optional) - only for
+  a host whose first run needs steps the other harnesses do not. `firstRunSteps`
+  replaces the two next-step lines that end `aidlc config`. `editorTerminalApp`
+  is the `TERM_PROGRAM` value the editor's built-in terminal sets; running
+  `aidlc config` there makes this harness the wizard's default choice.
+  `hookActivation` is for a host that may run no hooks until the person acts.
+  Every text in it names only the person's own step, in the host's own words,
+  never hooks, the engine, or why; `<entry>`, `<folder>` and `<next>` are
+  filled in for the install (`<next>` is the engine's `next` command; in
+  `next`'s stop it is fixed words saying to run the stopped command again, so
+  its request is kept). `recovery` is doctor's fix. Set
+  `agentStep` only when a hook on the agent's own shell command leaves a
+  heartbeat in the record before the engine runs, even with its own check
+  switched off: it says what the agent does itself and quotes the exact line it
+  then shows the person.
+  `next` then stops with it as a `print` before any work once a stage has
+  started with no heartbeat at all, and in that same state the attended "no
+  new human reply" refusal carries it with "do not ask them to answer again".
+  Otherwise, or for a harness without `agentStep`, that refusal gives
+  `missedReply` instead (an `AIDLC_UNATTENDED=1`
+  run gets its own explanation), worded for a person who may not have replied
+  yet ("If the person already replied, ..."). `missedReplyInHost`
+  (`{ env, text }`) gives one host its own line when any of the named
+  environment variables is set in the agent's shell (a `NAME=value` entry
+  when it holds that value, and none when a `NAME=value` variable holds
+  another value); Kiro IDE uses it for `TERM_PROGRAM=kiro`, which its agent's
+  commands carry, and `VSCODE_IPC_HOOK`/`VSCODE_PID`, which only its hooks
+  carry, so Kiro CLI in VS Code's terminal (`TERM_PROGRAM=vscode`) is not
+  taken for Kiro IDE. `agentStepInHost` (`{ env, text }`) does the same for
+  `agentStep`, so the agent gets only its own tool's line: given one line
+  per tool, an agent showed the wrong one. Set `notRunYet` only when the
+  harness's hooks leave a heartbeat on every chat message, the first one before
+  any workflow included (the human-turn hook does, and so do the Copilot and
+  Kiro IDE adapters); doctor then warns with that text while no heartbeat
+  exists, and with `agentStep` the first `next` stops with the agent's step
+  when the person's message left none, before any work. Set `notRunInWorkflow` only
+  with `agentStep`: when the person has switched the presence check off, so
+  `next` does not stop, the engine adds that sentence to every directive's
+  `change_notices` instead. Claude Code, Codex CLI, Kiro CLI and opencode
+  declare `recovery`, `agentStep` and `notRunYet` (Kiro CLI also `missedReply`,
+  which names its agent picker); Copilot also
+  `notRunInWorkflow`; Kiro IDE `recovery`, `missedReply`, `missedReplyInHost`,
+  `notRunYet`, `agentStep` and `agentStepInHost`. In a folder Kiro has not
+  been allowed to run commands in, no AI-DLC command can run, so Kiro IDE
+  also keeps that step in its orchestrator skill.
+- `directiveMaxBytes` (optional) - for a host that keeps less of one shell
+  result than the engine's 28 KiB directive cap. The engine keeps every
+  directive at or under it: stage rules ride inline only while they fit, and
+  load-steering parts are cut to fit. Size it below the host's cut with room for
+  the trailing newline (a UTF-8 byte count is never below the character count).
+  Only Copilot declares it (19,000 bytes, for VS Code's 20,000-character
+  terminal result). A native engine also applies it to projects configured by an
+  older release, from the runtime it ships, never lets a project's own value
+  exceed it, and in a project with several harnesses installed the smallest
+  declared limit wins. When a step cannot fit,
+  the error names the host from a fixed list keyed by harness name
+  (`HOST_LABELS` in `core/tools/aidlc-runtime-paths.ts`), never from the
+  project-editable `productName`; add your harness there, or it reads "this
+  assistant".
+- `rootIntegrations` — every project-root file emitted by the normal projection,
+  each with an explicit init merge policy (`managed-block`, `json-map`,
+  `json-array`, `whole-file`, `jsonc-settings`, or `json-entries`).
+  `json-entries` is for a team's own JSON config file (opencode's
+  `opencode.json`): config adds AI-DLC's values and array strings at any depth
+  only where absent, adds a map's `"*"` rule only when the map has none, keeps
+  everything else, and follows or retires only entries still holding the value
+  it wrote; its part ships in root-blocks and the copy runtime leaves the file
+  out. `jsonc-settings` is for an
+  editor's own JSONC settings file (Copilot's `.vscode/settings.json`): config
+  adds each shipped top-level key only when the project does not set it, never
+  changes a value someone else set, keeps every other key, comment, and line,
+  records the keys it added so a key the team later removes is not added back,
+  and retires only a key whose value is still the one it added. The copy
+  runtime leaves such a file out, so copying never replaces the team's own.
+  Declare marker/JSON identity, optionality, and
+  exact legacy adoption hashes here. The packager rejects an emitted top-level
+  entry that is neither a managed directory nor a declared root integration.
+  `shared: "union"` combines managed-block line sets across installed harnesses.
+  `shared: "identical"` declares byte-identical content that any declaring harness
+  may own, so two harnesses shipping it can coexist; absent `shared`, the block is exclusive.
+- `nativeRootIntegrations` (optional) — release-channel-only root files, such as
+  a trust seed, with the same merge contract plus an authored `src`.
+- `tierFlavor` — selects the existing Claude/Codex/Kiro/OpenCode agent
+  model/effort projection shape. It is manifest data, never inferred from
+  `name`.
+- `kiroLayout` (Kiro rows only) — `agent-v1` (JSON agents carrying their hooks)
+  or `kas` (Markdown agents and standalone `.kiro/hooks/*.json`, which Kiro IDE
+  1.x and Kiro CLI v3 run). It is written to `harness.json`, and runtime code
+  that depends on the layout reads it from the installed tree rather than from
+  `name`.
+- `coreDirs: DirMap[]` — which `core/<src>` dirs project into `<harnessDir>/<dst>`.
+  Rename or drop dirs here (Kiro `rules → steering`; Codex `rules → aidlc-rules`
+  and drops `skills/` — see emit). The 3 session skills are core dirs for
+  in-tree harnesses (claude, kiro, kiro-ide); codex emits them instead.
+- `harnessFiles: FileMap[]` — authored surfaces copied verbatim from
+  `harness/<name>/<src>` into each channel (supported text formats get token
+  substitution).
+  `projectRoot: true` lands a file beside the harness dir (e.g. `AGENTS.md`).
+- `orchestratorSkillPath` (optional) — project-root-relative path to the
+  assembled orchestrator `SKILL.md`. It defaults to
+  `<harnessDir>/skills/aidlc/SKILL.md`; declare it for emit-owned layouts outside
+  that tree, such as `.agents/skills/aidlc/SKILL.md`.
+- `frontmatterAdditions` (optional) - per-file YAML lines appended to a
+  core-projected `.md`'s frontmatter during projection, for a harness-NATIVE
+  field that must not ship to other harnesses (kiro-ide injects
+  `tools: ["read", "write", "shell"]` into its delegation-target agent files -
+  the IDE reads subagent tool grants from the `.md` frontmatter). Declared as
+  manifest data so core stays single-source; the packager errors on a typo'd
+  path, a missing frontmatter block, or a key core already declares.
+- `nativeReplacements` (optional) — exact `{ from, to }` text the release
+  channel swaps in before its generic invocation rewrite, for projected content
+  whose copy-channel spelling has no mechanical native form (kiro-ide's persona
+  shell deny). The packager errors when a `from` is absent from the projection,
+  and its projected-invocation check skips the `to` text, which is generated
+  from the route table.
+- `rulesRename` — the renamed rules dir (`"steering"` | `"aidlc-rules"` | `null`).
+  The packager applies it to the copied dir AND to in-prose `<harnessDir>/rules/`
+  references AND to the compiled stage-graph rule paths (it sets
+  `AIDLC_RULES_DIR` at compile so `loadRules` finds the renamed dir) AND emits it
+  into a generated `tools/data/harness.json` that records both the manifest
+  name and rules directory. Runtime path resolution uses the name to
+  disambiguate harnesses that share an engine directory, while `rulesSubdir()`
+  reads the rename — so a real install resolves both facts without hardcoding.
+  This is the seam that makes `rulesRename` purely manifest data: set it here and
+  every layer (build prose, compiled paths, runtime) follows, with no `core/` edit.
+- `onboarding: OnboardingSpec` — render neutral guidance from
+  `core/templates/onboarding.md` and harness-specific setup from
+  `core/templates/onboarding-harness.md` with `harness/<name>/onboarding.fills.ts`.
+  `dst` names the output; `projectRoot: true` places it beside the engine directory.
+  Set `harnessDst` to a tree-root-relative native onboarding path to keep `dst`
+  neutral-only and emit the filled harness skeleton separately. Without
+  `harnessDst`, both parts are concatenated (native first, one blank line between),
+  as Claude and Copilot require. The native skeleton's leading `frontmatter` slot
+  supports always-on steering/rules; the neutral skeleton must contain no markers.
+  The packager verifies byte identity for every `shared: "identical"` root path.
+  Use `null` only when `emit.ts` owns onboarding or no onboarding ships.
+- `skipRunnerGen` — set when the harness ships no `<harnessDir>/skills/` (Codex
+  emits its skill tree to `.agents/skills/` via `emit`); the packager then skips
+  the standard runner-gen step.
+- `emit` — the optional plugin (Step 3), `null` for harnesses that need none.
+- `plugin` (optional) — the host plugin manifest directory and delivery kind.
+  Omitting it derives `<harnessDir>-plugin` plus store delivery; set `kind:
+  "kiro"` only for a folder-drop host.
+
+Claude's manifest is the minimal reference (no rename, no emit); Kiro's adds a
+rename + `harnessFiles` (agent JSONs and adapter) plus split root/native onboarding;
+Codex demonstrates native-only root integration and imperative emission.
+
+The packager writes `tools/data/harness.json`, `aidlc-stamp.json`, and
+`aidlc-projection.json` from these fields. The first is runtime configuration;
+the stamp identifies version/distribution/harness; the projection descriptor is
+the install ownership contract. Its optional project-relative `onboarding` path
+identifies the native file diagnostics tracks (absent when onboarding is the root
+file). `aidlc config` will reject an inconsistent or unsafe descriptor, so do not
+generate parallel metadata in `emit.ts`.
+
+## Step 2 — the hook adapter (the per-harness shim)
+
+Core hooks consume Claude-shaped stdin as the normal form. A new harness ships
+**one authored adapter** (`harness/<name>/hooks/aidlc-<name>-adapter.ts`,
+listed in `harnessFiles`) that normalizes the harness's hook
+payloads into that contract and subprocess-pipes to the shared core hook.
+Never split a core hook into logic+adapter — the core bodies stay byte-shared
+across all harnesses apart from the explicit invocation-token projection.
+`--check` proves both generated forms came from the same source.
+
+Wire the adapter to the harness's events the harness's own way: Kiro registers
+targets in `agents/aidlc.json`; Codex emits `hooks.json`. Register only events
+with a real core-hook consumer.
+
+Six hooks are flow-altering and need their control channels forwarded, not
+just piped. The Stop hook answers with `{"decision":"block"}` on stdout;
+dispatch-rules rewrites the delegated prompt; and the PreToolUse
+reviewer-scope, review-freeze, plan-approval, and state-transition guards
+answer with exit 2 + a reason on stderr (the tool call must be refused when
+the adapter relays that exit code). If the new harness cannot hard-block a
+tool call from its pre-tool seam, leave the reviewer-scope and review-freeze
+registrations out and document the gap rather than wiring dead hooks - the
+prose bounds in stage-protocol-reviewer.md §12a still govern there. When the harness's
+payloads carry no subagent identity, scope reviewer-scope registration to the
+reviewer agents themselves where the harness supports per-agent hooks (the
+Kiro CLI pattern: the adapter then asserts `scoped_registration` instead of
+matching `agent_type`).
+
+> **The one sanctioned `core/` edit: the doctor arm.** `/aidlc --doctor`
+> (`core/tools/aidlc-utility.ts`) health-checks an installed tree, and a new
+> harness adds a per-harness arm there for its own install surfaces (adapter +
+> wiring files present, any binary-version floor). This is deliberate
+> per-harness *logic*, not data — a version check spawns the CLI and compares
+> semver, which no manifest row can express (the three-concerns rule: knowledge
+> lives in code) — so it is the blessed exception to "zero `core/` edits", not a
+> violation (a deliberate design tradeoff). It degrades gracefully: a harness with no arm simply
+> gets the generic checks rather than failing. Everything else — dir resolution,
+> the rules-dir rename, packaging — stays pure manifest data.
+
+## Step 3 — `emit.ts` (the imperative 20%, only if needed)
+
+Structural divergence a declarative row can't express is `emit.ts` — a plugin
+the manifest references that the packager calls with an `EmitContext`
+(`repoRoot`, `coreRoot`, `harnessRoot`, `harnessName`, `distRoot`,
+`harnessDir`, channel-aware `substituteToken`, `tierCap`). The emitter writes
+its outputs beneath `distRoot`. Codex's is the worked example:
+`config.toml`, `hooks.json`, the hook-trust pre-seed, the native onboarding skills-path rewrite, the
+agent-TOML transpositions, and the `.agents/skills/` tree (composed from
+`core/tools/aidlc-runner-gen.ts`'s exported render functions under
+`AIDLC_HARNESS_DIR`, never reimplemented). Harnesses whose surfaces are all
+authored files (Claude, Kiro) set `emit: null`.
+
+Under `--check`, the packager supplies two independent temporary `distRoot`
+sets, runs the same emitter once per channel in each build, then compares the
+two complete generated roots. Emit-owned files outside `<harnessDir>` (for
+example `.agents/skills/`) therefore participate in the
+same missing, differing, and orphan checks as declarative outputs. Always pass
+emitted command text through `ctx.substituteToken`; otherwise an emitter can
+silently put a Bun command into the native channel.
+
+## Step 4 — the bounded transform classes
+
+Permitted transforms are the harness/rules projection, the two invocation
+tokens, declared tier/frontmatter additions, and the native host-surface
+rewrites in `rewriteNativeInvocations`. That native pass updates command
+allowlists, hook/adapter/statusline routes, onboarding runtime text, and native
+trust entries, then rejects any surviving token or Bun invocation into an AIDLC
+tool/hook. No blind `sed`. Truthful harness-specific literals in `core/` (the
+`$CLAUDE_PROJECT_DIR` note, the harness-dir enumeration in
+workspace-detection) carry no token and pass through unchanged; the core-hygiene
+and native-projection tests guard the boundary.
+
+One more projection keeps each tree to its own tool. The construction, topology,
+reviewer and swarm protocol modules each end with one `### <tool>` binding
+subsection per harness, and `scripts/harness-bindings.ts` ships a tree only its
+own. To port: add your tool's subsection to each of those runs and its heading
+to `BINDING_HEADINGS`. Until you do, your tree ships every tool's subsection.
+
+## Step 5 — tests + the gate
+
+- A package-determinism test (`t145`) runs `package.ts --check`; it covers both
+  channels for every discovered harness plus every plugin projection without
+  requiring generated trees on disk.
+- `t243-install-mechanism` asserts copy projections keep Bun invocations,
+  release projections contain no AIDLC Bun invocation, metadata is safe and
+  exhaustive, and native-only integrations appear only in `dist-release/`.
+- `t238-build-binaries` compiles the native dispatcher and exercises every
+  generated harness runtime without Bun on `PATH`.
+- A `<name>` hook-adapter contract test pipes live-captured payloads through the
+  adapter and asserts the observable core-hook effect.
+- Live journeys ship as e2e gated on a `skipReason()` (a `AIDLC_<NAME>_*_LIVE=1`
+  env + the binary present + authenticated) so they skip cleanly in the
+  deterministic tier and run green locally before a port merges.
+
+Run `bun scripts/package.ts <name>` to materialize both local channels,
+`--check` to prove deterministic generation, and
+the deterministic suite (`bash tests/run-tests.sh --smoke --unit --integration
+-P 8`) plus the live journey to gate.
+
+## Next
+
+That closes the arc: you have shaped the data surfaces (chapters 01–08) and now
+rendered the core onto a new CLI. From here:
+
+- Back to [the Harness Engineer Guide overview](00-overview.md) for the full map.
+- The new harness gets a **user-facing chapter** alongside the others — see how
+  the existing ones read in the User Guide's
+  [Running on other harnesses](../guide/harnesses/README.md) family.
+- The normative build contract (manifest types, the `emit` plugin API, the
+  `harnessDir()` seam) lives in the Developer Reference's
+  [Architecture § Source vs distribution](../reference/01-architecture.md#source-vs-distribution-one-core-many-harnesses).
