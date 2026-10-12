@@ -13,14 +13,28 @@ read [Use the AI-DLC Kit](docs/using-the-kit.md).
 
 The independently maintained AI-DLC methodology kit for Flow Agents. It uses the same public kit installation, activation, Flow gate and host adapter contracts as any other kit. Upstream methodology and license provenance are frozen under `upstream/`.
 
-Install the Git repository at an immutable revision into an initialized Flow Agents workspace:
+`@kontourai/aidlc-kit` is not published to the npm registry (`npm view @kontourai/aidlc-kit` returns 404). Install it from GitHub.
+
+To pin an exact commit, install from GitHub into a bootstrap directory, then register the installed copy as a kit with the Flow Agents CLI that the install brought with it:
 
 ```sh
-flow-agents kit install https://github.com/kontourai/aidlc-kit.git#<commit> --dest /path/to/workspace
+mkdir aidlc-bootstrap && cd aidlc-bootstrap
+npm init -y
+npm install --save-exact 'github:kontourai/aidlc-kit#<commit>'
+npx flow-agents kit install ./node_modules/@kontourai/aidlc-kit --dest "$PWD"
+npx flow-agents kit activate --dest "$PWD" --format json
+```
+
+`flow-agents kit install` can also clone directly, but its `#<ref>` and `--ref` accept only a branch or tag name, not a commit SHA:
+
+```sh
+flow-agents kit install https://github.com/kontourai/aidlc-kit.git#<branch-or-tag> --dest /path/to/workspace
 flow-agents kit activate --dest /path/to/workspace --format json
 ```
 
-The packed npm tarball (`npm pack`) is also a kit repository: unpack it and pass the resulting `package` directory to `flow-agents kit install`. Installation copies a validated repository; it does not fetch or execute npm dependencies. Runtime applications install this package normally to resolve its pinned public Flow and Surface dependencies.
+The packed tarball from `npm pack` is also a kit repository: unpack it and pass the resulting `package` directory to `flow-agents kit install`. Installation copies a validated repository; it does not fetch or execute npm dependencies. Runtime applications install this package from GitHub, as above, to resolve its pinned public Flow and Surface dependencies.
+
+To work on the kit itself, from a clone:
 
 ```sh
 npm ci
@@ -35,10 +49,10 @@ Documentation is published to <https://kontourai.github.io/aidlc-kit/> with docs
 
 See [execution](docs/execution.md) and [methodology](docs/methodology.md) for controller, authority and evidence boundaries.
 
-For ordinary installed execution, install this repository through npm in a bootstrap directory outside your application workspace, then register that directory as a kit. The kit pins its published Flow Agents runtime in `package.json`, including the public `/kit-execution`, `/docker-worker` and `/provider-broker` exports. The kit itself is distributed from Git; select an immutable reviewed commit for reproducible installation. Native setup is covered in the walkthrough above; the lower-level example below uses an isolated Codex worker.
+For ordinary installed execution, install this repository from GitHub with npm in a bootstrap directory outside your application workspace, then register that directory as a kit. The kit pins its published Flow Agents runtime in `package.json`, including the public `/kit-execution`, `/docker-worker` and `/provider-broker` exports. The kit itself is distributed from Git; select an immutable reviewed commit for reproducible installation. Native setup is covered in the walkthrough above; the lower-level example below uses an isolated Codex worker.
 
 ```sh
-npm install "git+https://github.com/kontourai/aidlc-kit.git#<reviewed-commit-sha>"
+npm install --save-exact "github:kontourai/aidlc-kit#<reviewed-commit-sha>"
 flow-agents kit install node_modules/@kontourai/aidlc-kit --dest .
 flow-agents kit activate --dest . --format json
 flow-agents kit run aidlc --dest . --request /private/request.json --controller-root /private/run-controller --auth-file /private/codex-auth.json
