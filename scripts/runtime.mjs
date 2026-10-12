@@ -167,6 +167,7 @@ async function runAidlcUnlocked({request,executor,commandRunner,authority,contro
     units=executionSlice?.units??restoreUnits(workspace,records);
     const run=await loadRun(request.run_id,controllerRoot);if(run.state.status==='completed'){failure=null;break;}
     if(run.state.status!=='active'){failure={reason:run.state.status==='paused'?'authority_required':'canonical_run_inactive',stage:run.state.current_step,status:run.state.status};break;}
+    const hostExecutionContext={run_id:request.run_id,controller_root:controllerRoot,...(executionSlice?.parentAdmission?{root_owner:{run_id:executionSlice.parentAdmission.request.run_id,controller_root:executionSlice.parentAdmission.controllerRoot,request_binding:requestBindingDigest(executionSlice.parentAdmission.request)}}:{})};
     const stageId=run.state.current_step;if(!stageIds.includes(stageId)){failure={reason:'invalid_cursor',stage:stageId};break;}
     const retained=records.find(record=>record.stage===stageId&&!record.invalidated&&record.artifact_observation?.structural_status==='pass'&&['pass','disabled'].includes(record.sensors?.status));
     if(retained){await evaluateRun(request.run_id,{cwd:controllerRoot});continue;}
@@ -193,7 +194,7 @@ async function runAidlcUnlocked({request,executor,commandRunner,authority,contro
         const combined={stage:id,profile,ceremony:settings,artifacts:parts.flatMap(record=>record.artifacts),sensors:{status:parts.every(record=>record.sensors.status==='disabled')?'disabled':'pass',checks:parts.flatMap(record=>record.sensors.checks)},tests:parts.flatMap(record=>record.tests),dispatch:{status:'completed',units:parts.flatMap(record=>record.dispatch.units),executions:parts.reduce((sum,record)=>sum+record.dispatch.executions,0)},construction_children:walk.children.map(child=>({unit:child.unit,run_id:child.result.run_id,checkpoint:child.checkpoint??null,unit_checkpoint:child.unit_checkpoint??null,verification:child.verification??null})),evidence:{},invalidated:false};
         if(contract.reviewer){
           let context={shared:{task:request.prompt,operator_input_revisions:operatorInputRevisions,profile,defaults:settings,stage:contract,upstream_artifacts:[...initialArtifacts,...combined.artifacts]},units:Object.fromEntries(units.map(unit=>[unit.id,{artifact_targets:artifactPaths(contract,unit.id)}]))};
-          const verification=await verifyFinalUnits({stage:contract,units,dispatched:combined.dispatch,context,executor,controllerRoot,parentRunId:request.run_id,parentAdmissionStage:id,signal,policy:request.parameters?.dispatch_policy??{}});
+          const verification=await verifyFinalUnits({hostExecutionContext:{...hostExecutionContext,stage:id},stage:contract,units,dispatched:combined.dispatch,context,executor,controllerRoot,parentRunId:request.run_id,parentAdmissionStage:id,signal,policy:request.parameters?.dispatch_policy??{}});
           if(verification.status!=='completed'){failure={stage:id,reason:'final_source_review_failed',detail:verification};await refuse(id,failure);break;}
           combined.dispatch.final_verification=verification;executions.push(...(verification.dispatch?.units??[]).flatMap(unit=>unit.receipts??[]));
         }
@@ -320,7 +321,7 @@ async function runAidlcUnlocked({request,executor,commandRunner,authority,contro
       }
       let unitFlow,inputReplayed=Boolean(retainedReview);
       try{
-        let stageExecutor={...executor,async onProgress(observed){saveRetainedDispatch({controllerRoot,kind:'review',stage:stageId,binding:reviewBinding(),admission:checkpointRetryIdentity(run),basis:reviewBasis(),dispatch:observed,context});await executor.onProgress?.(observed);},beforeReview:createIntentInputCheckpoint({request,controllerRoot,authority,settings,requestDigest:binding.request_digest,admission:checkpointRetryIdentity(run)}),async execute(dispatch){return executor.execute({...dispatch,beforePublication:async()=>{await dispatch.beforePublication?.();assertTestingPolicyCurrent(testing,testingInput);}});}};
+        let stageExecutor={...executor,async onProgress(observed){saveRetainedDispatch({controllerRoot,kind:'review',stage:stageId,binding:reviewBinding(),admission:checkpointRetryIdentity(run),basis:reviewBasis(),dispatch:observed,context});await executor.onProgress?.(observed);},beforeReview:createIntentInputCheckpoint({request,controllerRoot,authority,settings,requestDigest:binding.request_digest,admission:checkpointRetryIdentity(run)}),async execute(dispatch){return executor.execute({...dispatch,host_execution_context:{...hostExecutionContext,stage:stageId},beforePublication:async()=>{await dispatch.beforePublication?.();assertTestingPolicyCurrent(testing,testingInput);}});}};
         if(stage.for_each){unitFlow=await createUnitFlow({controllerRoot,parentRunId:request.run_id,stage,units,snapshotBasis:executor.snapshotBasis});stageExecutor=unitFlow.bindExecutor(stageExecutor);}
         const historicalFile=unitFlow?path.join(controllerRoot,'unit-dispatch',`${unitFlow.runId}.json`):null;
         const executeStage=async()=>{
@@ -366,7 +367,7 @@ async function runAidlcUnlocked({request,executor,commandRunner,authority,contro
         if(dispatched.status==='completed'&&unitFlow){
           const historicalJoin=await unitFlow.join();
           if(!historicalJoin.complete&&historicalJoin.status==='completed'&&historicalJoin.units.every(unit=>unit.gate_status==='pass'&&unit.settled)&&stage.reviewer){
-            const verification=await verifyFinalUnits({stage,units,dispatched,context,executor,controllerRoot,parentRunId:request.run_id,signal,policy:request.parameters?.dispatch_policy??{}});
+            const verification=await verifyFinalUnits({hostExecutionContext:{...hostExecutionContext,stage:stageId},stage,units,dispatched,context,executor,controllerRoot,parentRunId:request.run_id,signal,policy:request.parameters?.dispatch_policy??{}});
             dispatched.final_verification=verification;dispatched.historical_join=historicalJoin;
             if(verification.status!=='completed')dispatched={...dispatched,status:'blocked',reason:verification.failure?.reason??'final_source_review_failed'};
           }else if(!historicalJoin.complete)dispatched={...dispatched,status:'blocked',reason:'canonical_unit_join_incomplete'};

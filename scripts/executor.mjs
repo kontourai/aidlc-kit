@@ -2,11 +2,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { randomUUID } from 'node:crypto';
-import { digest } from './compile.mjs';
+import { digest,requestBindingDigest } from './compile.mjs';
 import { readArtifact } from './artifacts.mjs';
 import { snapshotWorkspace } from './runtime.mjs';
 import { buildExecutionPrompt, observeOutputs,sealControllerCheckpoint,verifyControllerCheckpoint } from './authority.mjs';
 import {verifyReferenceClosure} from './reference-closure.mjs';
+import {captureArtifactVersions,projectArtifactHistory,observeExecutionVisit} from './artifact-history.mjs';
 import {stampTestingPlan} from './testing-posture.mjs';
 import {createPublicationJail} from './publication.mjs';
 
@@ -68,7 +69,7 @@ export function createDockerExecutor({request,controllerRoot,workerRunner,signal
       const admittedSource=request.host_setup?.isolation==='trusted-host'?snapshotWorkspace(workspace):null;
       if(admittedSource&&dispatch.basis?.source_digest!==admittedSource.source_digest)throw Object.assign(new Error('Native dispatch source basis changed before execution; fresh dispatcher admission required'),{code:'stale_basis'});
       if(history.starts.some(attempt=>attempt.request_digest===dispatch.request_digest))throw new Error('Prior worker execution requires durable receipt replay; automatic retry is forbidden');
-      const attempt={execution_owner:config.owner_id,engine_image:config.image,request_digest:dispatch.request_digest,invocation_id:identity.instance_id,started_at:Date.now(),status:'started'};history.starts.push(attempt);turns++;persistHistory();
+      const attempt={execution_visit:await observeExecutionVisit({request,controllerRoot,dispatch}),author_role:dispatch.role,execution_owner:config.owner_id,engine_image:config.image,request_digest:dispatch.request_digest,invocation_id:identity.instance_id,started_at:Date.now(),status:'started'};history.starts.push(attempt);turns++;persistHistory();
       const fork=path.join(workerRoot,identity.instance_id);fs.mkdirSync(fork,{recursive:false,mode:0o700});
       // Source files and authorized input artifacts only. No sibling raw contributions,
       // controller state, grader, source credentials, or canonical Flow state is copied.
@@ -100,7 +101,9 @@ export function createDockerExecutor({request,controllerRoot,workerRunner,signal
       const assertInputsCurrent=(root)=>{for(const [file,expected] of inputArtifacts){if(dispatch.phase!=='review'&&ownTargets.some(target=>target.path===file)&&!approvedInputs.has(file))continue;let actual;try{actual=readArtifact(root,file).digest;}catch{throw new Error('Worker removed or made an assigned input unreadable');}if(actual!==expected)throw new Error(approvedInputs.has(file)?'Worker changed approved plan/test instructions':'Worker changed an assigned read-only input');}};
       for(const diary of dispatch.context.learning_diaries??[]){const source=path.join(workspace,diary.path);if(fs.existsSync(source)){fs.mkdirSync(path.dirname(path.join(fork,diary.path)),{recursive:true});fs.copyFileSync(source,path.join(fork,diary.path));}}
       for(const local of ['.aidlc/state.md','.aidlc/project-description.json']){const source=path.join(workspace,local);if(fs.existsSync(source)){fs.mkdirSync(path.dirname(path.join(fork,local)),{recursive:true});fs.copyFileSync(source,path.join(fork,local));}}
+      const historical=contribution?{inputs:[],check:()=>{}}:await projectArtifactHistory({request,controllerRoot,history,dispatch,targets:ownTargets,approvedInputs,fork,sourceDigest:before.source_digest,visit:attempt.execution_visit});
       const prompt=buildExecutionPrompt({dispatch:{...dispatch,context:{...dispatch.context,upstream_artifacts:upstreamArtifacts}},workspace,sourceDigest:before.source_digest,outputTargets:ownTargets});
+      if(historical.inputs.length){prompt.read_only_prior_artifact_versions=historical.inputs;prompt.historical_input_binding=historical.binding;prompt.instructions.push('Prior own-artifact bytes are verified read-only history at snapshot_path. Read them to preserve content outside the authorized revision. Their original_path is identity metadata, not a supplied current output. Historical bytes never satisfy current outputs, immutable input claims, approvals or gates. Do not modify historical files or reconstruct preservation claims when their bytes are unavailable.');}
       if(inputLineage.length){prompt.original_dispatch_digest=digest(dispatch);prompt.read_only_input_lineage=inputLineage;prompt.instructions.push('Current reviewed own outputs supersede historical same-stage upstream references only through the host-observed author publication lineage supplied here. Review the current frozen bytes; original author receipts and retired references remain history, not current approval.');}
       prompt.instructions.push(`This invocation's exact writable output targets: ${JSON.stringify(dispatch.phase==='review'?[]:ownTargets.filter(ref=>!approvedInputs.has(ref.path)))}. ${contribution?'Create only your own contribution file; other contributors are intentionally absent.':''}`);
       prompt.allowed_source_changes=dispatch.phase!=='review'&&!contribution&&!dispatch.context.planning_only&&(dispatch.context.stage?.workspace_requires===true||typeof dispatch.context.source_write_authority==='string');
@@ -114,11 +117,11 @@ export function createDockerExecutor({request,controllerRoot,workerRunner,signal
       if(Buffer.byteLength(JSON.stringify(worker))>16*1024*1024)throw new Error('Worker capture exceeds durable receipt budget');
       attempt.worker=worker;attempt.status='observed';persistHistory();
       observed.push(worker);
-      verifyReferenceClosure(request.source_root);
+      verifyReferenceClosure(request.source_root);await historical.check();
       if(request.host_setup?.isolation==='trusted-host'&&snapshotWorkspace(workspace).source_digest!==before.source_digest)throw new Error('Native worker changed canonical source outside publication');
       if(nativeArtifactBasis!==null&&artifactInventory(workspace)!==nativeArtifactBasis)throw new Error('Native worker changed canonical artifacts outside publication');
       assertInputsCurrent(workspace);
-      const observation={...(inputLineage.length?{input_lineage:inputLineage}:{}),worker:identity.instance_id,container_id:worker.observed.container_id,provider_thread_id:worker.provider_thread_id,context_digest:worker.observed.context_digest,stdin_digest:worker.observed.stdin_digest,source_fork_digest:worker.observed.source_fork_digest,input_basis:dispatch.basis,terminal:worker.terminal,usage:worker.usage};
+      const observation={historical_input_basis:historical.inputs,historical_input_binding:historical.binding,...(inputLineage.length?{input_lineage:inputLineage}:{}),worker:identity.instance_id,container_id:worker.observed.container_id,provider_thread_id:worker.provider_thread_id,context_digest:worker.observed.context_digest,stdin_digest:worker.observed.stdin_digest,source_fork_digest:worker.observed.source_fork_digest,input_basis:dispatch.basis,terminal:worker.terminal,usage:worker.usage};
       const receipt={id:identity.instance_id,digest:digest(observation),request_digest:dispatch.request_digest};
       if(worker.storage_violation)throw Object.assign(new Error(`Worker storage budget refused: ${worker.storage_violation.reason}`),{code:'storage_budget',observation:worker.storage_violation});
       const native=request.host_setup?.isolation==='trusted-host';
@@ -162,18 +165,21 @@ export function createDockerExecutor({request,controllerRoot,workerRunner,signal
         return {status:response.status,identity,identity_basis:'executor-observed',receipt,input_basis:dispatch.basis,artifacts:dispatch.reviewed_artifacts??[],basis,verdict:response.verdict,findings:response.findings??[],observation};
       }
       const returned=observeOutputs(fork,ownTargets);
+      if(historical.inputs.length){const declared=dispatch.context.stage?.produces,optional=dispatch.context.stage?.optional_produces??[];for(const target of ownTargets)if(!approvedInputs.has(target.path)&&target.optional!==true&&(Array.isArray(declared)?declared.includes(target.id):!optional.includes(target.id))&&!returned.some(ref=>ref.path===target.path))throw new Error(`Required current output missing; historical input is not an output: ${target.path}`);}
       const reports=[];
       for(const ref of response.artifacts){
         if(!ref||!safeRel(ref.path))throw new Error('Worker returned artifacts outside assigned scope');
         if(ownTargets.some(target=>target.path===ref.path)){reports.push({path:ref.path,kind:'stage-output'});continue;}
+        if(historical.inputs.some(input=>input.snapshot_path===ref.path)){reports.push({path:ref.path,kind:'historical-input',digest:historical.inputs.find(input=>input.snapshot_path===ref.path).digest});continue;}
         if(inputArtifacts.has(ref.path)){reports.push({path:ref.path,kind:'unchanged-input',digest:inputArtifacts.get(ref.path)});continue;}
         if(prior.has(ref.path)||next.has(ref.path)){reports.push({path:ref.path,kind:'application-source',digest:next.get(ref.path)?.digest??null,changed:changed.includes(ref.path)});continue;}
         throw new Error('Worker returned artifacts outside assigned scope');
       }
       observation.reported_paths=reports;receipt.digest=digest(observation);
+      let artifactVersions=[];
       const apply=async()=>{
         await dispatch.beforePublication?.();
-        assertInputsCurrent(workspace);
+        assertInputsCurrent(workspace);await historical.check();
         const publication=publicationJail.preflight([...new Set([...changed,...returned.map(ref=>ref.path)])]);
         const payloads=new Map();
         createPublicationJail(fork).preflight([...new Set([...changed.filter(file=>next.has(file)),...returned.map(ref=>ref.path)])]);
@@ -184,7 +190,7 @@ export function createDockerExecutor({request,controllerRoot,workerRunner,signal
         if(storage){
           for(const file of changed)if(next.has(file)&&next.get(file).bytes>storage.max_file_bytes)throw Object.assign(new Error(`Published file exceeds per-file storage budget: ${file}`),{code:'storage_budget'});
           let writeBytes=changed.reduce((sum,file)=>sum+(next.has(file)?next.get(file).bytes:0),0);let writeEntries=changed.length;
-          for(const ref of returned){const size=fs.statSync(path.join(fork,ref.path)).size;if(size>storage.max_file_bytes)throw Object.assign(new Error(`Published artifact exceeds per-file storage budget: ${ref.path}`),{code:'storage_budget'});writeBytes+=size;writeEntries++;}
+          for(const ref of returned){const size=fs.statSync(path.join(fork,ref.path)).size;if(size>storage.max_file_bytes)throw Object.assign(new Error(`Published artifact exceeds per-file storage budget: ${ref.path}`),{code:'storage_budget'});writeBytes+=size*2;writeEntries+=2;}
           if(history.storage.bytes+writeBytes>storage.max_bytes)throw Object.assign(new Error('Shared storage byte budget exhausted'),{code:'storage_budget'});
           if(history.storage.entries+writeEntries>storage.max_entries)throw Object.assign(new Error('Shared storage entry budget exhausted'),{code:'storage_budget'});
           const free=fs.statfsSync(workspace);
@@ -192,13 +198,14 @@ export function createDockerExecutor({request,controllerRoot,workerRunner,signal
           if(storage.roots)for(const file of [...changed,...returned.map(ref=>ref.path)])if(!storage.roots.some(root=>{try{return inside(fs.realpathSync(root),path.join(workspace,file));}catch{return false;}}))throw Object.assign(new Error(`Published path outside declared storage roots: ${file}`),{code:'storage_budget'});
           history.storage.bytes+=writeBytes;history.storage.entries+=writeEntries;persistHistory();
         }
+        artifactVersions=await captureArtifactVersions({request,controllerRoot,author:identity.instance_id,targets:ownTargets,artifacts:returned,payloads});
         for(const file of changed){let actual;try{actual=readArtifact(workspace,file).digest;}catch(error){if(error.code!=='ENOENT')throw error;}
           if(actual!==prior.get(file)?.digest)throw new Error(`Concurrent source merge conflict: ${file}`);}
         for(const file of changed){if(!next.has(file)){publication.remove(file);continue;}const payload=payloads.get(file);publication.write(file,payload.bytes,payload.mode);}
         for(const ref of returned){const payload=payloads.get(ref.path);publication.write(ref.path,payload.bytes,payload.mode);}
       };
       const applied=merge.then(apply);merge=applied.catch(()=>{});await applied;
-      const publicationCheckpoint={before_source_digest:before.source_digest,stage:dispatch.stage,unit:dispatch.unit,invocation_id:identity.instance_id,request_digest:dispatch.request_digest,receipt:structuredClone(receipt),artifacts:returned.map(ref=>({path:ref.path,digest:ref.digest})),source_digest:snapshotWorkspace(workspace).source_digest};
+      const publicationCheckpoint={run_id:request.run_id,request_binding:requestBindingDigest(request),author:{id:identity.instance_id,role:dispatch.role,phase:dispatch.phase},visit:attempt.execution_visit,artifact_versions:artifactVersions,historical_inputs:historical.inputs,before_source_digest:before.source_digest,stage:dispatch.stage,unit:dispatch.unit,invocation_id:identity.instance_id,request_digest:dispatch.request_digest,receipt:structuredClone(receipt),artifacts:returned.map(ref=>({path:ref.path,digest:ref.digest})),source_digest:snapshotWorkspace(workspace).source_digest};
       attempt.publication={checkpoint:publicationCheckpoint,envelope:sealControllerCheckpoint({controllerRoot,checkpoint:publicationCheckpoint})};persistHistory();
       return {status:response.status,identity,identity_basis:'executor-observed',receipt,input_basis:dispatch.basis,artifacts:returned.map(ref=>({path:ref.path,digest:ref.digest})),observation,changed_source:changed,...(contribution?{objections:response.objections??[],role:dispatch.role}:{})};
     }

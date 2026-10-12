@@ -13,7 +13,7 @@ const fail = (code, message) => { throw Object.assign(new Error(message), { code
  * read-only reviews in a fresh canonical child Flow bound to final source.
  * No original completion or review receipt is relabelled as current evidence.
  */
-export async function verifyFinalUnits({ stage, units, dispatched, context = {}, executor, controllerRoot, parentRunId, signal, policy = {}, parentAdmissionStage }) {
+export async function verifyFinalUnits({ stage, units, dispatched, context = {}, executor, controllerRoot, parentRunId, signal, policy = {}, parentAdmissionStage, hostExecutionContext }) {
   const historical = structuredClone(dispatched);
   let flow, freshDispatch = null, join = null;
   try {
@@ -77,7 +77,7 @@ export async function verifyFinalUnits({ stage, units, dispatched, context = {},
         // digest. Its context already binds the exact final artifact list.
         const current = await observeCurrent({ stage: verificationStage, unit: manifest.find(unit => unit.id === request.unit), artifacts: records.get(request.unit).artifacts, context: finalContext });
         if (!isDeepStrictEqual(current, snapshots.get(request.unit))) fail('historical_artifact_changed', 'Historical artifacts changed before review execution');
-        const reviewRequest = { ...request, phase: 'review', reviewed_artifacts: records.get(request.unit).artifacts, output_scope: 'review-only' };
+        const reviewRequest = { ...request,...(hostExecutionContext?{host_execution_context:hostExecutionContext}:{}), phase: 'review', reviewed_artifacts: records.get(request.unit).artifacts, output_scope: 'review-only' };
         return verifyResult(await executor.execute(reviewRequest), request);
       },
       async loadReceipt(request) { const result = await executor.loadReceipt?.(request); return result ? verifyResult(result, request) : null; },
