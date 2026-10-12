@@ -16,6 +16,7 @@ commands and permissions that a local coding task does not supply.
 | Coding engine | Uses its configured model and tools to author artifacts or perform a distinct review. |
 | Plumb | Shared check observations and required-check aggregation. The kit retains its methodology-specific checks and observes actual artifact bytes. |
 | Veritas | The Governance Kit wraps repository standards and readiness evaluation, hosted by Flow Agents. Passing these checks does not establish general semantic correctness. |
+| Survey | Optional artifact review UI, persisted decisions and MCP App over the host-owned current queue. |
 | Surface | Evidence and provenance contracts used by the host. A valid receipt is not proof of authenticated human approval. |
 | Evals | Independent comparison and grading, used for qualification rather than required for an ordinary project run. |
 | Datum / Station | Optional provider references or host connections. They are not prerequisites for the standalone native CLI path. |
@@ -230,9 +231,9 @@ unsettled observations. The output includes artifact text/digests and remaining
 worker count/deadline; native upstream provider-request usage is not inferred.
 
 Inspection holds the controller lock, writes no approval and advances no gate.
-A consumer must re-admit the current subject before application. Survey review
-presentation and its domain decision adapter remain optional follow-on interfaces;
-this command alone does not establish human approval or semantic correctness.
+A consumer must re-admit the current subject before application. The optional [Survey decision interface](#optional-survey-requirements-decisions)
+provides presentation and admitted decision application for this subject. Inspection
+alone establishes neither human approval nor semantic correctness.
 
 ## Optional Survey requirements decisions
 
@@ -287,3 +288,31 @@ application requiring personally authenticated human review must provide that
 identity and authorization through its trusted host; this local adapter does
 not claim it. Command-line/native/Docker execution continues to work with no
 Survey peer installed.
+
+## Compose repository governance with AI-DLC
+
+AI-DLC controls the selected development ceremony. The Veritas Governance Kit
+controls repository standards and readiness. Adopt the Governance Kit separately
+through Flow Agents and use Veritas's canonical readiness bundle when your flow
+requires repository governance. An AI-DLC structural check does not satisfy an
+unrelated repository standard, and a standards-plan approval is not an AI-DLC
+questionnaire reply or artifact approval.
+
+Both kits consume Plumb check observations while retaining their own adapter
+semantics. AI-DLC binds its observation to the stage artifact set; Veritas's
+shared command observation binds to a check definition and retains execution
+identity. That definition digest must not be described as a source-tree digest.
+Veritas's full readiness evaluation owns its own source/freshness policy.
+
+For a paused Flow gate, Flow Agents already exposes review-work discovery,
+queue construction, `createSurveyFlowGateAdapter`, and
+`continuePausedFlowGateFromSurvey`. The host provides the current producer-owned
+queue, resolver, expected run head and continuation authority. Reuse these ports
+when embedding Survey in a general workflow. An AI-DLC active operator checkpoint
+is handled by this kit's signed controller protocol; it must not be passed to a
+paused-gate adapter merely because its UI looks similar.
+
+Survey's browser, CLI and embedded MCP App are presentation transports over the
+same producer queue. Survey event persistence is separate from host application,
+Flow advancement, human authentication and independent output grading. Choose the
+transport your host supports and preserve those contracts across it.
