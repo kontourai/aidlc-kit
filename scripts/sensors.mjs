@@ -2,6 +2,7 @@ import { basename, dirname, resolve, relative, isAbsolute, sep } from 'node:path
 import { realpathSync } from 'node:fs';
 import { readArtifact } from './artifacts.mjs';
 import { digest, readSnapshot } from './compile.mjs';
+import { observeCheck, summarizeChecks } from '@kontourai/plumb/checks';
 
 export const SENSOR_IDS = Object.freeze(['required-sections', 'upstream-coverage', 'traceability', 'claim-sources', 'linter', 'type-check']);
 // Manifest dispatch contract at AWS 2.11.0 / 2a555f7. Document gate sensors
@@ -358,7 +359,7 @@ async function commandCheck(id, context, workspace, basis, runner, applicableFil
   const request = { id, command: cfg.command, cwd, timeoutMs: Math.min(Math.max(cfg.timeoutMs ?? 120000, 1), SENSOR_MANIFESTS[id].timeout_seconds * 1000), maxOutputBytes: 1024 * 1024, basis, files: applicableFiles };
   const result = await runner(request);
   if (!result || !Number.isInteger(result.exitCode) || typeof result.stdout !== 'string' || typeof result.stderr !== 'string' || !result.receipt || Buffer.byteLength(result.stdout + result.stderr) > request.maxOutputBytes) return { status: 'not_verified', findings: ['Command capture result is missing, malformed or unbounded'] };
-  if (result.exitCode !== 0) return { status: 'fail', findings: [`Command exited ${result.exitCode}`, result.stderr.slice(0, 4096)], receipt: result.receipt, evidence_refs: result.evidence_refs ?? [] };
+  if (result.exitCode !== 0) return { status: 'fail', findings: [`Command exited ${result.exitCode}`, ...(result.stderr ? [result.stderr.slice(0, 4096)] : [])], receipt: result.receipt, evidence_refs: result.evidence_refs ?? [] };
   const findings = [], advisories = [];
   if (cfg.format === 'eslint-json') {
     let parsed;
@@ -443,5 +444,21 @@ export async function runStageSensors({ stage, workspace, artifacts, context = {
     try { if (readArtifact(workspace, value.path).digest !== value.digest) stale.push(value.path); } catch { stale.push(value.path); }
   }
   if (stale.length) checks.push({ id: 'basis-current', status: 'not_verified', findings: stale.map((path) => `Stale sensor basis: ${path}`), evidence_refs: [] });
-  return { status: checks.some((c) => c.status === 'fail') ? 'fail' : checks.some((c) => c.status === 'not_verified') ? 'not_verified' : 'pass', checks };
+  // The methodology decides which checks exist and what their findings mean.
+  // Shared plumbing records their observed result against this actual file set.
+  // A stage declaring no checks retains its explicit upstream contract.
+  if (!checks.length) return { status: 'pass', checks };
+  const evidence = [...observed.values()].map(({ path, digest }) => ({ path, sha256: digest })).sort((a, b) => a.path.localeCompare(b.path));
+  const basis = { kind: 'aidlc-stage-artifact-set', id: stage.slug, digest: digest({ stage: stage.source_digest, evidence }) };
+  const verifyCurrent = (_basis, refs) => refs.every(ref => readArtifact(workspace, ref.path).digest === ref.sha256);
+  const observations = [];
+  const allowed = checks.filter(check => ['linter', 'type-check'].includes(check.id) && check.applicability?.status === 'not_applicable').map(check => check.id);
+  for (const check of checks) {
+    const observation = await observeCheck({ id: check.id, basis, evidence, run: () => check, verifyCurrent, allowNotApplicable: allowed.includes(check.id) });
+    observations.push(observation);
+    check.status = observation.status;
+    check.findings = observation.findings;
+    check.observation = observation;
+  }
+  return { status: summarizeChecks(observations, { basis, requiredIds: checks.map(check => check.id), allowNotApplicableIds: allowed }), checks };
 }
