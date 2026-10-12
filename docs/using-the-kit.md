@@ -14,7 +14,8 @@ commands and permissions that a local coding task does not supply.
 | Flow | Canonical run state, gates, dependency invalidation, and routes back to work that needs correction. |
 | Flow Agents | Installation and activation, the public `kit setup`/`doctor`/`run` interface, and execution through the selected coding engine. |
 | Coding engine | Uses its configured model and tools to author artifacts or perform a distinct review. |
-| Veritas | Repository standards and applicable checks. Passing these checks does not establish general semantic correctness. |
+| Plumb | Shared check observations and required-check aggregation. The kit retains its methodology-specific checks and observes actual artifact bytes. |
+| Veritas | The Governance Kit wraps repository standards and readiness evaluation, hosted by Flow Agents. Passing these checks does not establish general semantic correctness. |
 | Surface | Evidence and provenance contracts used by the host. A valid receipt is not proof of authenticated human approval. |
 | Evals | Independent comparison and grading, used for qualification rather than required for an ordinary project run. |
 | Datum / Station | Optional provider references or host connections. They are not prerequisites for the standalone native CLI path. |
@@ -187,3 +188,24 @@ previous run's completion or approvals.
 compiler/conformance checks measure representation; independent Evals results
 measure the frozen cases and their declared limitations. Neither should be
 presented as universal runtime equivalence or superiority.
+
+## Check observations
+
+AWS names its deterministic checks “sensors”; those names remain in the pinned
+methodology and wire contracts. AI-DLC adapters own required sections, upstream
+coverage, traceability, claim-source structure, linting and type checks. Their
+common result plumbing comes from the dependency-free
+`@kontourai/plumb/checks` API, also consumed by Veritas.
+
+Each observation records an actual stage artifact-set digest, file SHA-256
+references, findings and `pass`, `fail`, `not_verified` or `not_applicable`.
+The kit re-reads observed files before accepting results. Missing captures,
+malformed diagnostics and stale bytes cannot pass. An actual command failure
+remains failed when stderr is empty. Only the kit's actual file applicability
+assessment permits a lint or type check to be inapplicable. A stage declaring no
+checks retains that explicit upstream contract; it does not manufacture a check.
+
+These structural observations do not establish semantic correctness, human
+approval or Veritas readiness. Surface derives trust evidence and Flow enforces
+the gate. Veritas retains its own repository standards and evaluation policy;
+shared plumbing does not move those rules into AI-DLC.

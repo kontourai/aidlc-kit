@@ -34,6 +34,8 @@ test('real authored IDs and existing targets pass with byte-bound references', a
   const result = await f.run();
   assert.equal(result.status, 'pass', JSON.stringify(result));
   assert.ok(result.checks.every((c) => c.evidence_refs.length && c.evidence_refs.every((r) => /^[a-f0-9]{64}$/.test(r.sha256))));
+  assert.ok(result.checks.every(c => c.observation.schema_version === '1.0' && c.observation.basis.kind === 'aidlc-stage-artifact-set' && c.observation.status === c.status));
+  assert.ok(result.checks.every(c => Object.isFrozen(c.observation) && c.observation.evidence_refs.every(ref => /^[a-f0-9]{64}$/.test(ref.sha256))));
 });
 test('omitted and invented upstream IDs cannot pass', async (t) => {
   const f = fixture(t);
