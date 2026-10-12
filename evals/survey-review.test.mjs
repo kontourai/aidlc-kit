@@ -3,14 +3,16 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import {buildReviewSessionEvents} from '@kontourai/survey/review-workbench';
-import {createRequirementsSurveyReview,serveRequirementsSurveyReview} from '../scripts/survey-review.mjs';
+import {createRequirementsSurveyReview,serveRequirementsSurveyReview,prepareKitReview} from '../scripts/survey-review.mjs';
 import {currentRequirementsReviewFixture} from './helpers/current-requirements-review.mjs';
 import {loadRun} from '@kontourai/flow';
+import {startReviewConsoleServer} from '@kontourai/survey/review-console';
 
 async function review(t,action,note=''){
   const f=await currentRequirementsReviewFixture(t);
-  const created=await createRequirementsSurveyReview({...f,reference:'Controlled local operator fixture'});
-  const server=await serveRequirementsSurveyReview({controllerRoot:f.controllerRoot,sessionPath:created.sessionFile});
+  const producer=await prepareKitReview({input:{controllerRoot:f.controllerRoot,pendingFile:f.pendingFile,reference:'Controlled local operator fixture'}});
+  const created={sessionFile:producer.sessionPath};
+  const server=await startReviewConsoleServer({sessionPath:producer.sessionPath,producerApply:{binding:producer.binding,apply:producer.apply}});
   t.after(()=>server.close());
   const initial=JSON.parse(fs.readFileSync(created.sessionFile));
   const decisions=Object.fromEntries(initial.snapshot.items.map(item=>[item.metadata.name,item.metadata.name==='workflow-decision'?(action==='could-not-confirm'?'could-not-confirm':'select-proposed'):'accept-proposed']));
@@ -74,4 +76,10 @@ test('a correction request cannot extend an exhausted original worker budget',as
   const f=await review(t,'request-changes','Correct the current requirement');
   f.saveHistory({...f.history,starts:Array.from({length:32},()=>f.history.starts[0])});
   assert.equal((await f.apply()).status,409);assert.equal(decisions(f.controllerRoot).length,0);
+});
+
+
+test('native review request fields cannot mint host authority or hide an unsupported subject',async()=>{
+  await assert.rejects(()=>prepareKitReview({input:{controllerRoot:'/tmp',pendingFile:'/tmp/pending',reference:'operator',actor:'person'}}),/Unsupported AI-DLC review input/);
+  await assert.rejects(()=>prepareKitReview({input:{controllerRoot:'/tmp',pendingFile:'/tmp/pending',reference:'operator'},host:{resolveAuthority:async()=>({status:'approved'})}}),/authenticated host authority is not supported/);
 });
