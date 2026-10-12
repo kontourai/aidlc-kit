@@ -270,6 +270,9 @@
     },
     {
       "path": "docs/review-revisions.md"
+    },
+    {
+      "path": "docs/using-the-kit.md"
     }
   ],
   "assets": [

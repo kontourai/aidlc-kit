@@ -6,6 +6,7 @@
   "repo": "kontourai/aidlc-kit",
   "landing": "README.md",
   "documents": [
+    { "source": "docs/using-the-kit.md", "section": "Start Here" },
     { "source": "docs/environment-setup.md", "section": "Start Here" },
     { "source": "docs/README.md", "section": "Concepts" },
     { "source": "docs/methodology.md", "section": "Concepts" },
@@ -18,6 +19,7 @@
     { "source": "docs/docker-worker-adapter.md", "section": "Reference" }
   ],
   "topics": [
+    { "id": "using-the-kit", "title": "Use AI-DLC with Kontour tools", "source": "docs/using-the-kit.md" },
     { "id": "install", "title": "Install and run the kit", "source": "README.md" },
     { "id": "engine-setup", "title": "Native engine login and installed-kit setup", "source": "docs/environment-setup.md#native-engine-setup" },
     { "id": "provider-auth", "title": "Datum provider references and credentials", "source": "docs/environment-setup.md#datum-provider-setup" },
