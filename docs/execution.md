@@ -165,3 +165,26 @@ an explicitly classified historical or illustrative example. Unknown normative
 core references and explicit static links refuse import; the pinned manifest
 hash prevents later source or classification changes from silently borrowing
 this qualification. A new upstream import requires review and qualification.
+
+## Prior own artifacts during revisions
+
+Successful author publications retain their exact own-artifact bytes in a
+private, bounded version store. A later ordinary revision or canonical reentry
+receives verified prior versions at separate read-only history paths, with the
+original run, stage, unit, source, author, publication and visit provenance.
+Current independent reviewers receive the same historical comparison inputs
+used by the revision author. Other stages and units are not exposed through
+this channel; existing upstream, peer and approved-input rules still apply.
+
+Historical paths are inputs for comparison and preservation, never current
+outputs or approvals. Authors must produce the currently required outputs;
+returning only historical references cannot satisfy publication. Declared
+optional outputs remain optional. Missing, changed, foreign or unsealed
+versions refuse execution or publication instead of reconstructing prior bytes.
+Older controllers without retained versions cannot claim this new guarantee.
+
+Archive writes spend the existing cumulative storage allowance. The public
+storage inspector counts hidden paths and orphan files, and projected inputs
+remain within worker quotas. No turn, attempt or deadline budget is reset.
+Native history files are verified before and after work; trusted-host execution
+still does not provide OS filesystem or credential confinement.

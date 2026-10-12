@@ -134,6 +134,10 @@ changes needs its current findings and revision instructions. Follow
 approval and input confirmation can be separate decisions; one does not imply
 the other.
 
+Revision authors and their distinct reviewers receive verified prior own-artifact
+bytes through [read-only history inputs](execution.md#prior-own-artifacts-during-revisions).
+These support exact comparison; they are not current outputs or approvals.
+
 The CLI signs the decision automatically against the current run, stage,
 source and artifact subject. This binds what was approved and rejects stale or
 wrong-subject decisions. It is not a separate manual signing step and does not

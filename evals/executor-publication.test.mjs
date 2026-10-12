@@ -127,8 +127,11 @@ test('workers receive the registered aggregate storage budget and the host ledge
   assert.equal(fs.readFileSync(path.join(f.workspace,'app.js'),'utf8'),'worker edit');
 });
 test('a shared byte budget exhausts across workers and stays exhausted after restart',async t=>{
-  const budget=registeredBudget({max_bytes:45});delete budget.roots;const f=fixture(t,{responseStatus:'completed',storageBudget:budget});
+  const firstPublicationBytes=Buffer.byteLength('worker edit')+Buffer.byteLength('worker addition')+2*Buffer.byteLength('worker artifact');
+  const budget=registeredBudget({max_bytes:firstPublicationBytes});delete budget.roots;const f=fixture(t,{responseStatus:'completed',storageBudget:budget});
   await f.execute();
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.controllerRoot,'executor-history.json'))).history.storage.bytes,firstPublicationBytes);
+  assert.equal(firstPublicationBytes,56);
   assert.equal(fs.readFileSync(path.join(f.workspace,'app.js'),'utf8'),'worker edit');
   const second=f.freshExecutor();
   const dispatch={request_digest:digest({second:true}),stage:'code-generation',role:'aidlc-developer-agent',phase:'inline',unit:'stage',context:{stage:{workspace_requires:true},artifact_targets:[{path:f.artifact}]},basis:await second.snapshotBasis({})};
