@@ -104,14 +104,25 @@ const DECISION_PURPOSES=['input-revision','live-recomposition','profile-composit
 /** Trusted CLI interaction. This observes an operator action, not a human signature. */
 const questionnaireAdmissions=new WeakSet();
 export async function recordControllerInteraction(args){const pending=JSON.parse(fs.readFileSync(args.pendingFile,'utf8')),input=pending.payload?.input;if(input?.purpose==='input-revision'){const {validateInputRevisionVisit}=await import('./input-revisions.mjs');await validateInputRevisionVisit({input,controllerRoot:args.controllerRoot});}if(input?.questionnaire)await validateQuestionnaireVisit({input,controllerRoot:args.controllerRoot});if(input?.purpose==='review-disposition')await validateReviewVisit({input,controllerRoot:args.controllerRoot,disposition:args.disposition});const admission={};questionnaireAdmissions.add(admission);try{return recordControllerDecision({...args,questionnaireAdmission:admission});}finally{questionnaireAdmissions.delete(admission);}}
-export function recordControllerDecision({controllerRoot,pendingFile,reference,decision='approve',disposition,questionnaireAdmission}) {
-  if(typeof reference!=='string'||!reference.trim()||reference.length>2048||!['approve','deny'].includes(decision))throw new Error('Explicit decision and reference required');
+function pendingControllerContext({controllerRoot,pendingFile}) {
   const root=fs.realpathSync(controllerRoot),authorityRoot=path.join(root,'authority'),file=fs.realpathSync(pendingFile),pendingRoot=fs.realpathSync(path.join(authorityRoot,'pending'));
   if(path.dirname(file)!==pendingRoot)throw new Error('Decision input must be a retained private pending request');
   const privateKey=createPrivateKey(fs.readFileSync(path.join(authorityRoot,'host-private-key.pem'))),publicKey=createPublicKey(privateKey);
   const fingerprint=createHash('sha256').update(publicKey.export({type:'spki',format:'der'})).digest('hex'),pending=JSON.parse(fs.readFileSync(file,'utf8')),input=pending.payload?.input;
   if(pending.payload?.kind!=='decision-pending'||pending.payload.issuer!==fingerprint||!input||pending.payload.input_digest!==decisionBindingDigest(input)||pending.payload.id!==decisionBindingDigest(input)||path.basename(file)!==`${decisionBindingDigest(input)}.json`||pending.payload.request_digest!==input.request_digest||!DECISION_PURPOSES.includes(input.purpose)||!verify(null,Buffer.from(JSON.stringify(pending.payload)),publicKey,Buffer.from(pending.signature??'','base64')))throw new Error('Pending decision signature or exact binding invalid');
   const bindingFile=path.join(root,'binding.json');if(fs.existsSync(bindingFile)&&JSON.parse(fs.readFileSync(bindingFile,'utf8')).request_digest!==input.request_digest)throw new Error('Pending decision request is stale');
+  return {input,root,authorityRoot,privateKey,publicKey,fingerprint};
+}
+/** Read-only presentation admission. Call under the controller lock; this grants no decision. */
+export async function inspectControllerReview({controllerRoot,pendingFile}) {
+  const {input}=pendingControllerContext({controllerRoot,pendingFile});
+  if(input.purpose!=='review-disposition')throw new Error('Artifact review requires a produced-artifact review disposition, not input confirmation');
+  await validateReviewVisit({input,controllerRoot});
+  return structuredClone(input);
+}
+export function recordControllerDecision({controllerRoot,pendingFile,reference,decision='approve',disposition,questionnaireAdmission}) {
+  if(typeof reference!=='string'||!reference.trim()||reference.length>2048||!['approve','deny'].includes(decision))throw new Error('Explicit decision and reference required');
+  const {input,authorityRoot,privateKey,fingerprint}=pendingControllerContext({controllerRoot,pendingFile});
   if(input.purpose==='input-revision'&&!questionnaireAdmissions.has(questionnaireAdmission))throw new Error('Input revisions require the ordinary current-visit CLI interaction');
   const revision=validateReviewDisposition(input,disposition);
   if(revision&&!questionnaireAdmissions.has(questionnaireAdmission))throw new Error('Review revisions require the ordinary current-visit CLI interaction');
