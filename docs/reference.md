@@ -18,6 +18,7 @@ Exit codes:
 | `check` | none | Runs `node scripts/compile.mjs --check`, which fails on drift between the snapshot and the generated `kit.json`, flows and skills. |
 | `run` | `--request <kit-request.json> --controller-root <private-root> [--auth-file <host-auth.json>]` | Executes the request through the kit's standard entry. Exits `0` when the result status is `completed` or `waiting`, otherwise `1`. |
 | `decisions` | `--controller-root <private-root>` | Lists signed pending inputs under `<private-root>/authority/pending/`, each with its file path. |
+| `inspect-review` | `--controller-root <private-root> --pending <current-signed-review.json>` | Reads a current `requirements-analysis` produced-artifact review under the controller lock. Verifies the signed request, current visit, artifact bytes and original execution bounds; prints the admitted input, document text/digests, basis digest and worker/deadline budget. Records no decision and advances no gate. |
 | `decide` | `--controller-root <private-root> --pending <signed-pending.json> --reference <operator-reference> [--decision approve\|deny] [--disposition <file.json>]` | Records an operator interaction against one pending input, under the controller lock. `--decision` defaults to `approve`. |
 | `recompose` | `--request <original-kit-request.json> --controller-root <private-root> --proposal <pending-stage-delta.json>` | Proposes, or applies once approved, a change to the pending stages of a stopped run. |
 | `revise-input` | `--request <original-request.json> --controller-root <private-root> --pending <current-signed-wait.json> --proposal <exact-input-revision.json>` | Proposes, or applies once explicitly approved, one exact revision to an accepted observed public input at a settled wait, retaining original requests, budgets and receipts. |
@@ -26,6 +27,7 @@ Exit codes:
 
 Each command's contract is described in its guide:
 
+- `inspect-review`: [current requirements review inspection](using-the-kit.md#inspect-the-current-requirements-review). Questionnaire/input confirmation, stale or expired subjects, drifted history and unsettled workers are refused; inspection supplies no human approval.
 - `decide --disposition` with questionnaire answers: [questionnaire replies](questionnaire-replies.md).
 - `decide --disposition` with review corrections, and `recover-controller`: [review revisions](review-revisions.md).
 - `recompose`: [recomposition](recomposition.md).

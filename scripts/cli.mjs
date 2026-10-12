@@ -9,7 +9,7 @@ import {recordControllerInteraction} from './authority.mjs';
 import {readSnapshot,generatedFiles} from './compile.mjs';
 const [command,...args]=process.argv.slice(2);
 const get=name=>{const at=args.indexOf(name);return at<0?null:args[at+1];};
-const HELP='kontour-aidlc profiles | check | revise-input --request <original-request.json> --controller-root <private-root> --pending <current-signed-wait.json> --proposal <exact-input-revision.json> | recover-controller --controller-root <private-root> | recompose --request <original-kit-request.json> --controller-root <private-root> --proposal <pending-stage-delta.json> | run --request <kit-request.json> --controller-root <private-root> [--auth-file <host-auth.json>] | decisions --controller-root <private-root> | decide --controller-root <private-root> --pending <signed-pending.json> --reference <operator-reference>';
+const HELP='kontour-aidlc profiles | check | revise-input --request <original-request.json> --controller-root <private-root> --pending <current-signed-wait.json> --proposal <exact-input-revision.json> | recover-controller --controller-root <private-root> | recompose --request <original-kit-request.json> --controller-root <private-root> --proposal <pending-stage-delta.json> | run --request <kit-request.json> --controller-root <private-root> [--auth-file <host-auth.json>] | inspect-review --controller-root <private-root> --pending <current-signed-review.json> | decisions --controller-root <private-root> | decide --controller-root <private-root> --pending <signed-pending.json> --reference <operator-reference>';
 // Usage errors are operator input mistakes, not faults: print the message without a stack and exit 2,
 // keeping exit 1 for commands that ran and failed.
 const usage=message=>{process.stderr.write(`kontour-aidlc: ${message}\n`);process.exit(2);};
@@ -34,6 +34,11 @@ if(command==='run'){
  const root=path.join(path.resolve(controllerRoot),'authority/pending');
  const pending=fs.existsSync(root)?fs.readdirSync(root).filter(file=>file.endsWith('.json')).map(file=>({file:path.join(root,file),...JSON.parse(fs.readFileSync(path.join(root,file),'utf8')).payload})):[];
  console.log(JSON.stringify(pending,null,2));
+}else if(command==='inspect-review'){
+ const controllerRoot=get('--controller-root'),pendingFile=get('--pending');
+ if(!controllerRoot||!pendingFile)usage('Usage: kontour-aidlc inspect-review --controller-root <private-root> --pending <current-signed-review.json>');
+ const {inspectRequirementsReview}=await import('./review-admission.mjs');
+ console.log(JSON.stringify(await withControllerLock(controllerRoot,()=>inspectRequirementsReview({controllerRoot,pendingFile}))));
 }else if(command==='decide'){
  const controllerRoot=get('--controller-root'),pendingFile=get('--pending'),reference=get('--reference');
  if(!controllerRoot||!pendingFile||!reference)usage('Usage: kontour-aidlc decide --controller-root <private-root> --pending <signed-pending.json> --reference <operator-reference> [--decision approve|deny] [--disposition <explicit-disposition.json>]');

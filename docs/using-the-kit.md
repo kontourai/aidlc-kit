@@ -209,3 +209,27 @@ These structural observations do not establish semantic correctness, human
 approval or Veritas readiness. Surface derives trust evidence and Flow enforces
 the gate. Veritas retains its own repository standards and evaluation policy;
 shared plumbing does not move those rules into AI-DLC.
+
+## Inspect the current requirements review
+
+A host preparing a Survey session can inspect a current produced-artifact review
+without recording a decision:
+
+```sh
+kontour-aidlc inspect-review --controller-root /private/controller \
+  --pending /private/controller/authority/pending/current-review.json
+```
+
+This first interface handles `requirements-analysis` review dispositions. It
+refuses questionnaire/input confirmation. It uses the same signed pending-request
+binding as the decision writer, verifies the current Flow visit and sealed review
+checkpoint, and reads the exact current artifact bytes. It also requires the
+retained admitted request and settled executor history, preserves the original
+worker limit and wall-clock deadline, and refuses stale, expired, drifted or
+unsettled observations. The output includes artifact text/digests and remaining
+worker count/deadline; native upstream provider-request usage is not inferred.
+
+Inspection holds the controller lock, writes no approval and advances no gate.
+A consumer must re-admit the current subject before application. Survey review
+presentation and its domain decision adapter remain optional follow-on interfaces;
+this command alone does not establish human approval or semantic correctness.
