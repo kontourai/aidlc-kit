@@ -46,12 +46,13 @@ Keep three locations separate:
 | Private controller | Decisions, execution receipts, checkpoints, and host authority state. |
 
 The bootstrap and controller must be outside the application workspace. Use
-absolute paths. The following example leaves application dependencies alone:
+absolute paths and select or create the application directory before setup.
+The following example leaves application dependencies alone:
 
 ```sh
 aidlc_project_dir=/absolute/path/to/project
 aidlc_host_dir=/absolute/path/to/aidlc-host
-mkdir -p "$aidlc_host_dir/bootstrap" "$aidlc_host_dir/controller"
+mkdir -p "$aidlc_project_dir" "$aidlc_host_dir/bootstrap" "$aidlc_host_dir/controller"
 chmod 700 "$aidlc_host_dir/controller"
 cd "$aidlc_host_dir/bootstrap"
 npm init -y
