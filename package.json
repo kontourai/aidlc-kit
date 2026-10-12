@@ -44,5 +44,16 @@
   },
   "bin": {
     "kontour-aidlc": "scripts/cli.mjs"
+  },
+  "devDependencies": {
+    "@kontourai/survey": "8.1.0"
+  },
+  "peerDependencies": {
+    "@kontourai/survey": ">=8.1.0 <9"
+  },
+  "peerDependenciesMeta": {
+    "@kontourai/survey": {
+      "optional": true
+    }
   }
 }
