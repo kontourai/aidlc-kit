@@ -1,5 +1,13 @@
 # AI-DLC Kit
 
+**The pinned AWS AI-DLC methodology, run as a Flow Agents kit with a Flow gate on every stage and Surface evidence.**
+
+[![CI](https://github.com/kontourai/aidlc-kit/actions/workflows/ci.yml/badge.svg)](https://github.com/kontourai/aidlc-kit/actions/workflows/ci.yml)
+[![Docs](https://img.shields.io/badge/docs-kontourai.github.io-blue)](https://kontourai.github.io/aidlc-kit/)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
+[Documentation](https://kontourai.github.io/aidlc-kit/) · [AI-DLC on Flow](https://kontourai.io/use-cases/aidlc/)
+
 For a practical walkthrough of setup, tool responsibilities and ordinary use,
 read [Use the AI-DLC Kit](docs/using-the-kit.md).
 
@@ -12,7 +20,7 @@ flow-agents kit install https://github.com/kontourai/aidlc-kit.git#<commit> --de
 flow-agents kit activate --dest /path/to/workspace --format json
 ```
 
-The npm package is also a kit repository: unpack its tarball and pass the resulting `package` directory to `flow-agents kit install`. Installation copies a validated repository; it does not fetch or execute npm dependencies. Runtime applications install this package normally to resolve its pinned public Flow and Surface dependencies.
+The packed npm tarball (`npm pack`) is also a kit repository: unpack it and pass the resulting `package` directory to `flow-agents kit install`. Installation copies a validated repository; it does not fetch or execute npm dependencies. Runtime applications install this package normally to resolve its pinned public Flow and Surface dependencies.
 
 ```sh
 npm ci
