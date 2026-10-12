@@ -1,5 +1,8 @@
 # AI-DLC Kit
 
+For a practical walkthrough of setup, tool responsibilities and ordinary use,
+read [Use the AI-DLC Kit](docs/using-the-kit.md).
+
 The independently maintained AI-DLC methodology kit for Flow Agents. It uses the same public kit installation, activation, Flow gate and host adapter contracts as any other kit. Upstream methodology and license provenance are frozen under `upstream/`.
 
 Install the Git repository at an immutable revision into an initialized Flow Agents workspace:
@@ -24,7 +27,7 @@ Documentation is published to <https://kontourai.github.io/aidlc-kit/> with docs
 
 See [execution](docs/execution.md) and [methodology](docs/methodology.md) for controller, authority and evidence boundaries.
 
-For ordinary installed execution, install this repository through npm in the destination workspace, then install and activate that directory as a kit. The kit pins the published Flow Agents 7.1.0 runtime, including its public `/kit-execution`, `/docker-worker` and `/provider-broker` exports. The kit itself is distributed from Git; select an immutable reviewed commit for reproducible installation.
+For ordinary installed execution, install this repository through npm in a bootstrap directory outside your application workspace, then register that directory as a kit. The kit pins its published Flow Agents runtime in `package.json`, including the public `/kit-execution`, `/docker-worker` and `/provider-broker` exports. The kit itself is distributed from Git; select an immutable reviewed commit for reproducible installation. Native setup is covered in the walkthrough above; the lower-level example below uses an isolated Codex worker.
 
 ```sh
 npm install "git+https://github.com/kontourai/aidlc-kit.git#<reviewed-commit-sha>"
@@ -33,7 +36,7 @@ flow-agents kit activate --dest . --format json
 flow-agents kit run aidlc --dest . --request /private/request.json --controller-root /private/run-controller --auth-file /private/codex-auth.json
 ```
 
-The ordinary request uses `schema: "kontour.kit.execution_request"`, `version: "1.0"`, `kit_id: "aidlc"`, a task `prompt`, `run_id`, absolute model `workspace`, finite `execution` model/turn/time settings, and `engine_sandbox.image` as an immutable Docker image ID. Kit runtime dependencies resolve in the destination workspace; the model workspace is separate. Host prerequisites are Node 24, Docker (Desktop on macOS or Engine on Linux) and Python 3 for descriptor-relative storage inspection. Keep controller state, credentials and hidden grading materials outside worker mounts.
+The ordinary request uses `schema: "kontour.kit.execution_request"`, `version: "1.0"`, `kit_id: "aidlc"`, a task `prompt`, `run_id`, absolute model `workspace`, and finite `execution` model/turn/time settings. The isolated Docker path also requires `engine_sandbox.image` as an immutable image ID. Kit runtime dependencies resolve in the bootstrap directory; the model workspace is separate. Host prerequisites for Docker execution are Node 24, Docker (Desktop on macOS or Engine on Linux) and Python 3 for descriptor-relative storage inspection. Keep controller state, credentials and hidden grading materials outside worker mounts.
 
 For a Linux host with an incoming firewall, configure `engine_sandbox.provider_broker` with an explicit IP `bind_host` and TCP `port`. The public worker maps `host.docker.internal` to the Docker host gateway on Linux. Permit only the relevant Docker bridge source range to reach that listener; the scoped provider capability remains mandatory. The default uses an ephemeral port, and this configuration never disables or changes the host firewall. Configure reachability before starting a run; a connection failure is retained rather than counted as provider work.
 

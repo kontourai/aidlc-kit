@@ -1,5 +1,8 @@
 # AI-DLC Reference Kit
 
+Start with [Use the AI-DLC Kit](using-the-kit.md) for tool responsibilities,
+authentication, a small native run, operator decisions and result interpretation.
+
 AWS AI-DLC's pinned 33-stage methodology and 11 profiles, expressed through Kontour's existing Flow definitions and Flow Agents kit contracts. This independently installable reference exercises the same extension path available to external kit authors. It is not activated as a default Builder replacement.
 
 The current implementation reproduces profile selection and stage contracts, provides agent stage skills, fingerprints artifact inputs/outputs, projects dependency invalidation, and tests real published Flow/Surface gate behavior. Full AWS runtime equivalence and generated-output effectiveness remain unverified; [parity.json](parity.json) is the explicit capability ledger.
