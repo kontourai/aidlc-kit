@@ -120,6 +120,15 @@ export async function inspectControllerReview({controllerRoot,pendingFile}) {
   await validateReviewVisit({input,controllerRoot});
   return structuredClone(input);
 }
+/** Recover a prior host-written decision for idempotent transport application. */
+export function findControllerReviewDecision({controllerRoot,pendingFile,reference}) {
+  const {input,authorityRoot,publicKey,fingerprint}=pendingControllerContext({controllerRoot,pendingFile});
+  for(const name of fs.readdirSync(authorityRoot).filter(name=>name.endsWith('.json')&&!name.endsWith('.input.json'))){
+    const receipt=JSON.parse(fs.readFileSync(path.join(authorityRoot,name),'utf8')),payload=receipt.payload;
+    if(payload?.kind==='controller-decision'&&(reference===undefined||payload.reference===reference)&&payload.issuer===fingerprint&&payload.input_digest===decisionBindingDigest(input)&&payload.request_digest===input.request_digest&&verify(null,Buffer.from(JSON.stringify(payload)),publicKey,Buffer.from(receipt.signature??'','base64')))return receipt;
+  }
+  return null;
+}
 export function recordControllerDecision({controllerRoot,pendingFile,reference,decision='approve',disposition,questionnaireAdmission}) {
   if(typeof reference!=='string'||!reference.trim()||reference.length>2048||!['approve','deny'].includes(decision))throw new Error('Explicit decision and reference required');
   const {input,authorityRoot,privateKey,fingerprint}=pendingControllerContext({controllerRoot,pendingFile});

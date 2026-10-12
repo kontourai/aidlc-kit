@@ -233,3 +233,57 @@ Inspection holds the controller lock, writes no approval and advances no gate.
 A consumer must re-admit the current subject before application. Survey review
 presentation and its domain decision adapter remain optional follow-on interfaces;
 this command alone does not establish human approval or semantic correctness.
+
+## Optional Survey requirements decisions
+
+Install the optional review interface in the same bootstrap consumer as the kit:
+
+```sh
+npm install --save-exact @kontourai/survey@8.1.0
+npm exec -- kontour-aidlc review --controller-root /private/controller \
+  --pending /private/controller/authority/pending/current-review.json \
+  --reference "Local operator requirements review"
+```
+
+Use the current pending file returned by the stopped controller. The command
+prints a loopback URL and private `sessionFile`. Open that URL to inspect the
+actual artifact text, source paths and SHA-256 references. The queue shows the
+original deadline and remaining worker slots. It does not renew the deadline.
+
+Accept each artifact card after inspection, then choose the separate workflow
+action and **Send review to workflow**:
+
+| Action | Controller effect |
+| --- | --- |
+| Approve | Records approval for the exact current requirements basis. Open findings or judgment dissent still require the existing explicit disposition policy. |
+| Decline | Records denial; the requirements remain unapproved. |
+| Request changes | Requires a correction note. Retains a deterministic operator concern and the original review; a new author and distinct review must fit the existing worker/revision budgets. |
+| Could not confirm | Requires a reason and retains signed feedback. It supplies no approval or denial. |
+
+Artifact acceptance in the workbench is distinct from questionnaire answers.
+This interface handles produced requirements review dispositions and refuses
+input-confirmation subjects. Artifacts are read-only; edits become correction
+requests rather than writes to canonical model outputs.
+
+The same private session can be inspected and updated by Survey's MCP server,
+including its embedded MCP App on compatible hosts:
+
+```sh
+npx --yes --package=@kontourai/survey@8.1.0 survey-review-mcp \
+  --session /private/controller/survey-reviews/current-session.json
+```
+
+The MCP tools record review events. Application stays with the host's console
+callback, which rechecks the signed request, current Flow visit, artifact/source
+bytes and original execution history before recording a decision under the
+controller lock. Stale, expired, forged or competing submissions refuse.
+A retained signed receipt makes a retry recover the first decision rather than
+write another. Continue through the existing `flow-agents kit run aidlc` entry;
+this console does not execute a model, restart the run, or bypass Flow gates.
+
+Local browser/MCP interactions are **host-observed operator interactions**.
+A reference string or session actor name does not authenticate a person. An
+application requiring personally authenticated human review must provide that
+identity and authorization through its trusted host; this local adapter does
+not claim it. Command-line/native/Docker execution continues to work with no
+Survey peer installed.
