@@ -19,7 +19,7 @@ function fixture(t, { responseStatus = 'failed', terminalStatus = 0, maxTurns = 
   const artifact = '.aidlc/artifacts/code-generation/code-summary.md';
   fs.mkdirSync(path.dirname(path.join(workspace, artifact)), { recursive: true });
   fs.writeFileSync(path.join(workspace, artifact), 'canonical artifact');
-  const request = { workspace, source_root: workspace, run_id: 'publication-fixture', execution: { max_turns: maxTurns, timeout_s: 60, model: 'local-fixture',reasoning_effort:reasoningEffort }, engine_sandbox: { image: `sha256:${'a'.repeat(64)}`, artifact_root: path.join(root, 'artifacts'), storage_budget: storageBudget === 'workspace-logical' ? registeredBudget({ roots: [workspace] }) : storageBudget } };
+  const request = { workspace, source_root: path.resolve(import.meta.dirname,'..'), run_id: 'publication-fixture', execution: { max_turns: maxTurns, timeout_s: 60, model: 'local-fixture',reasoning_effort:reasoningEffort }, engine_sandbox: { image: `sha256:${'a'.repeat(64)}`, artifact_root: path.join(root, 'artifacts'), storage_budget: storageBudget === 'workspace-logical' ? registeredBudget({ roots: [workspace] }) : storageBudget } };
   let fork, calls = 0, dispatch, observedStorageBudget,observedReasoning;
   const workerRunner = async (input) => {
     calls++;observedStorageBudget=input.storageBudget;observedReasoning=input.reasoningEffort;
@@ -184,7 +184,7 @@ async function reportedPathsFixture(t,{report,mutateInput=false,deleteInput=fals
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'aidlc-reported-paths-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
  const workspace=path.join(root,'source'),controllerRoot=path.join(root,'controller');fs.mkdirSync(workspace);fs.mkdirSync(controllerRoot);fs.writeFileSync(path.join(workspace,'app.mjs'),'export const value=1;');
  const input='.aidlc/artifacts/requirements/requirements.md',output='.aidlc/artifacts/code-generation/code-summary.md';fs.mkdirSync(path.dirname(path.join(workspace,input)),{recursive:true});fs.writeFileSync(path.join(workspace,input),'# Approved requirement\n');const originalInput=digest(fs.readFileSync(path.join(workspace,input)));
- const request={workspace,source_root:workspace,run_id:'path-report-fixture',execution:{max_turns:2,timeout_s:30,model:'host-port'},engine_sandbox:{image:`sha256:${'a'.repeat(64)}`,artifact_root:path.join(root,'capture')}};
+ const request={workspace,source_root:path.resolve(import.meta.dirname,'..'),run_id:'path-report-fixture',execution:{max_turns:2,timeout_s:30,model:'host-port'},engine_sandbox:{image:`sha256:${'a'.repeat(64)}`,artifact_root:path.join(root,'capture')}};
  const workerRunner=async invocation=>{
   if(sourceAuthority){fs.writeFileSync(path.join(invocation.workspace,'app.mjs'),'export const value=2;');fs.writeFileSync(path.join(invocation.workspace,'app.test.mjs'),'test source');}
   if(mutateInput)fs.writeFileSync(path.join(invocation.workspace,input),'altered requirement');if(deleteInput)fs.unlinkSync(path.join(invocation.workspace,input));
@@ -217,6 +217,6 @@ test('canonical artifact leaf symlinks cannot overwrite an external file or publ
 });
 test('explicit missing upstream artifact refuses worker admission before any source can be invented',async t=>{
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'aidlc-missing-input-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));const workspace=path.join(root,'source'),controllerRoot=path.join(root,'controller');fs.mkdirSync(workspace);fs.mkdirSync(controllerRoot);fs.writeFileSync(path.join(workspace,'app.js'),'original source');let starts=0;
- const request={workspace,source_root:workspace,run_id:'missing-input',execution:{max_turns:2,timeout_s:30,model:'host-port'},engine_sandbox:{image:`sha256:${'a'.repeat(64)}`,artifact_root:path.join(root,'capture')}};
+ const request={workspace,source_root:path.resolve(import.meta.dirname,'..'),run_id:'missing-input',execution:{max_turns:2,timeout_s:30,model:'host-port'},engine_sandbox:{image:`sha256:${'a'.repeat(64)}`,artifact_root:path.join(root,'capture')}};
  const executor=createDockerExecutor({request,controllerRoot,workerRunner:async()=>{starts++;throw new Error('Must never start');}}),dispatch={request_digest:digest('missing-input'),stage:'code-generation',unit:'stage',phase:'inline',role:'lead',basis:await executor.snapshotBasis({}),context:{stage:{workspace_requires:true},artifact_targets:[],upstream_artifacts:[{path:'.aidlc/artifacts/requirements.md',digest:'a'.repeat(64)}]}};dispatch.expected_identity=await executor.admit(dispatch);await assert.rejects(executor.execute(dispatch),/ENOENT/);assert.equal(starts,0);assert.equal(fs.readFileSync(path.join(workspace,'app.js'),'utf8'),'original source');
 });

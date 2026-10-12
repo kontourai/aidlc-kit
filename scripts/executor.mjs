@@ -6,6 +6,7 @@ import { digest } from './compile.mjs';
 import { readArtifact } from './artifacts.mjs';
 import { snapshotWorkspace } from './runtime.mjs';
 import { buildExecutionPrompt, observeOutputs,sealControllerCheckpoint,verifyControllerCheckpoint } from './authority.mjs';
+import {verifyReferenceClosure} from './reference-closure.mjs';
 import {stampTestingPlan} from './testing-posture.mjs';
 import {createPublicationJail} from './publication.mjs';
 
@@ -103,6 +104,7 @@ export function createDockerExecutor({request,controllerRoot,workerRunner,signal
       if(inputLineage.length){prompt.original_dispatch_digest=digest(dispatch);prompt.read_only_input_lineage=inputLineage;prompt.instructions.push('Current reviewed own outputs supersede historical same-stage upstream references only through the host-observed author publication lineage supplied here. Review the current frozen bytes; original author receipts and retired references remain history, not current approval.');}
       prompt.instructions.push(`This invocation's exact writable output targets: ${JSON.stringify(dispatch.phase==='review'?[]:ownTargets.filter(ref=>!approvedInputs.has(ref.path)))}. ${contribution?'Create only your own contribution file; other contributors are intentionally absent.':''}`);
       prompt.allowed_source_changes=dispatch.phase!=='review'&&!contribution&&!dispatch.context.planning_only&&(dispatch.context.stage?.workspace_requires===true||typeof dispatch.context.source_write_authority==='string');
+      verifyReferenceClosure(request.source_root);
       const contextFile=path.join(workerRoot,'contexts',`${identity.instance_id}.json`);put(contextFile,prompt);
       let worker;
       attempt.worker_started_at=Date.now();persistHistory();
@@ -112,6 +114,7 @@ export function createDockerExecutor({request,controllerRoot,workerRunner,signal
       if(Buffer.byteLength(JSON.stringify(worker))>16*1024*1024)throw new Error('Worker capture exceeds durable receipt budget');
       attempt.worker=worker;attempt.status='observed';persistHistory();
       observed.push(worker);
+      verifyReferenceClosure(request.source_root);
       if(request.host_setup?.isolation==='trusted-host'&&snapshotWorkspace(workspace).source_digest!==before.source_digest)throw new Error('Native worker changed canonical source outside publication');
       if(nativeArtifactBasis!==null&&artifactInventory(workspace)!==nativeArtifactBasis)throw new Error('Native worker changed canonical artifacts outside publication');
       assertInputsCurrent(workspace);

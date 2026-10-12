@@ -5,6 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {importReferenceClosure} from './import-references.mjs';
 
 const COMMIT = '2a555f7a4387cd1b8254029cccb9fd1e99974574';
 const VERSION = '2.11.0';
@@ -106,6 +107,7 @@ export function importUpstream(checkout, outputDirectory) {
   mkdirSync(outputDirectory, { recursive: true });
   writeFileSync(resolve(outputDirectory, 'snapshot.json'), `${JSON.stringify(snapshot, null, 2)}\n`);
   writeFileSync(resolve(outputDirectory, 'LICENSE-MIT-0'), committedFile(checkout, 'LICENSE').toString('utf8').trimEnd() + '\n');
+  importReferenceClosure(checkout,outputDirectory);
   return snapshot;
 }
 

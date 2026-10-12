@@ -1,0 +1,274 @@
+# Getting Started
+
+This guide takes you from installation to a verified first workflow. The native
+installer sets up everything AI-DLC needs; you do not need to install Bun or
+Node.js. Bun is needed only for the manual-copy path below.
+
+## Quick Start
+
+### 1. Install AI-DLC
+
+macOS, Linux, or WSL:
+
+```bash
+curl -fsSL https://github.com/awslabs/aidlc-workflows/releases/latest/download/install.sh | sh
+```
+
+Windows PowerShell:
+
+```powershell
+irm https://github.com/awslabs/aidlc-workflows/releases/latest/download/install.ps1 | iex
+```
+
+The installer sets up everything AI-DLC needs: the native `aidlc` command and
+every harness runtime. You do not need to install Bun or Node.js; a native
+install runs its hooks and commands through `aidlc` and does not call `bun`. On
+Windows, it installs for the current account, registers the bin directory in
+persistent User PATH, and updates the current PowerShell process. Run it from a
+normal PowerShell window; one opened with "Run as administrator" gets a warning
+and a prompt, since installing as administrator is less safe. If another session cannot find `aidlc`, open a new terminal.
+Use [`-NoModifyPath`](18-install-and-lifecycle.md#windows-powershell) to skip
+both PATH changes and invoke the printed direct command instead. On macOS,
+Linux, or WSL, apply the installer's PATH instruction if `aidlc` is not found.
+
+Prefer to manage the project files yourself, or cannot install a native
+executable? The manual-copy path is the one place Bun is needed: install
+[Bun](https://bun.sh/), download `aidlc-copy-runtime-X.Y.Z.tar.gz` from the
+[release](https://github.com/awslabs/aidlc-workflows/releases/latest), copy
+the complete `runtime/<harness>/` directory into the project, and run its own
+setup once, as [Copy Channel](18-install-and-lifecycle.md#copy-channel) shows.
+A copy never replaces your `.gitignore` or `AGENTS.md`; AI-DLC adds its own
+lines to them. The manual-copy path does not require the native `aidlc`
+command.
+
+### 2. Configure a project
+
+From the project root:
+
+```bash
+cd /path/to/your-project
+aidlc config --harness claude
+aidlc doctor
+```
+
+Replace `claude` with the harness you use:
+
+| Harness | Config value | Open | Invoke |
+| --- | --- | --- | --- |
+| Claude Code | `claude` | `claude` | `/aidlc` |
+| Kiro CLI | `kiro` | `kiro-cli chat` | `/aidlc` |
+| Kiro IDE | `kiro-ide` | Open the project, then choose **aidlc** in the chat panel's agent picker | `/aidlc` |
+| Codex CLI | `codex` | `codex` | `$aidlc` |
+| Cursor | `cursor` | Open Cursor or run `agent` | `/aidlc` |
+| opencode | `opencode` | `opencode` | `/aidlc` |
+| GitHub Copilot CLI >= 1.0.74 / VS Code >= 1.130 | `copilot` | Copilot CLI or VS Code | `/aidlc` |
+
+A bare `aidlc config` starts the interactive setup when a terminal is
+available. It detects installed harnesses, provider state, runtime needs, and
+trust actions before writing anything.
+
+If you use Kiro IDE's own terminal in a project folder you have not trusted
+yet, Kiro first asks whether you trust it. AI-DLC's hooks run only in a trusted
+folder, and trusting lets the folder's `.kiro` hooks run commands on your
+machine. So choose **Trust Folder & Continue** only for your own project or one
+you have checked; otherwise choose **Cancel** and review the folder first (see
+[First run](harnesses/kiro-ide.md#first-run)).
+
+### 3. Start the first workflow
+
+Open the configured harness in the project and describe the work:
+
+```text
+/aidlc Build a REST API for inventory management
+```
+
+Codex CLI uses:
+
+```text
+$aidlc Build a REST API for inventory management
+```
+
+AI-DLC selects a workflow profile from the request. You can also choose one:
+
+```text
+/aidlc express
+/aidlc feature Add customer notifications
+/aidlc bugfix Fix the login timeout
+```
+
+See [Workflow Profiles](workflow-profiles.md) for the available workflows and
+[Your First Workflow](02-your-first-workflow.md) for an annotated walkthrough.
+
+## Harness Prerequisites
+
+Install and authenticate the host harness before opening it. The native AI-DLC
+runtime itself does not require Git, Bun, or Node.js, but host requirements
+still apply.
+
+| Harness | Important first-run requirement | Guide |
+| --- | --- | --- |
+| Claude Code | Configure a supported provider; AI-DLC preserves the current selection | [Claude setup below](#aws-bedrock-setup) |
+| Kiro CLI >= 2.6 | Sign in with `kiro-cli login` | [Kiro CLI](harnesses/kiro-cli.md) |
+| Kiro IDE >= 1.1.70 (or Kiro CLI >= 2.24.1) | Sign in and open the configured project | [Kiro IDE](harnesses/kiro-ide.md) |
+| Codex CLI >= 0.145.0 | Use a Git repository and approve project hook trust | [Codex CLI](harnesses/codex-cli.md) |
+| Cursor | Sign in to the IDE or CLI | [Cursor](harnesses/cursor.md) |
+| opencode >= 1.17 | Configure the session provider globally | [opencode](harnesses/opencode.md) |
+| GitHub Copilot | Trust the project folder; use GitHub sign-in or BYOK | [GitHub Copilot](harnesses/copilot.md) |
+
+## AWS Bedrock Setup
+
+The Claude Code, Codex, and opencode distributions preserve the provider
+already configured by the user. Amazon Bedrock is an explicit option.
+
+### Provider-neutral default
+
+AI-DLC does not select a model provider in the shipped Claude Code, Codex, or
+opencode project configuration. The harness keeps the provider,
+authentication, model, and context settings already configured by the user.
+Balanced reviewer agents may cap reasoning effort, but they do not pin a
+provider-specific model.
+
+### Configure Bedrock (optional)
+
+Run `aidlc config providers` and select `amazon-bedrock`, or configure Claude
+Code directly:
+
+1. Enable access to the configured Anthropic models in the Amazon Bedrock model
+   catalog.
+2. Provide AWS credentials through the normal SDK credential chain, for example
+   `aws configure` or `aws sso login --profile <profile>`.
+3. Use a region where those models are available.
+4. Start `claude` and choose Amazon Bedrock at the provider prompt. You can run
+   `/setup-bedrock` later to change the account or region.
+
+Keep credentials and personal overrides out of the shared
+`.claude/settings.json`. Put them in `.claude/settings.local.json` or the
+standard AWS credential files.
+
+To keep the provider already selected in Claude Code, choose `keep current`
+in `aidlc config providers` (or pass `--provider current`). To record a different
+Claude Code-supported provider explicitly, run `aidlc config providers
+--provider other --yes`. This removes old AI-DLC-owned Bedrock overrides from
+the shared project settings and leaves the manual setup step pending. Complete
+that provider's authentication flow, then run `aidlc config providers
+--acknowledge --yes` to mark the step done. See the
+[Claude Code authentication guide](https://code.claude.com/docs/en/authentication).
+
+For IAM detail, model access, SSO, and regional troubleshooting, see
+[Claude Code on Amazon Bedrock](https://community.aws/content/2tXkZKrZzlrlu0KfH8gST5Dkppq/claude-code-on-amazon-bedrock-quick-setup-guide)
+and the [Amazon Bedrock documentation](https://docs.aws.amazon.com/bedrock/).
+
+## MCP Servers (optional)
+
+Claude projects can install the shipped MCP defaults during config:
+
+```bash
+aidlc config --harness claude --mcp defaults
+```
+
+Use `--mcp none` to omit them. A copy-channel install starts without them; run
+`bun .claude/tools/aidlc.ts config project --harness claude --mcp defaults --yes` to add them.
+The default set is:
+
+| Server | Provides | Credentials |
+| --- | --- | --- |
+| `context7` | Library and SDK documentation | `CONTEXT7_API_KEY` |
+| `aws-mcp` | AWS API access | AWS credential chain |
+| `aws-pricing` | AWS pricing queries | AWS credential chain |
+| `aws-iac` | Infrastructure-as-code tools | AWS credential chain |
+| `aws-serverless` | Serverless development tools | AWS credential chain |
+
+The four AWS servers require `uvx` and use the standard AWS credential chain.
+
+Every agent in the Claude session inherits available MCP servers. Missing
+credentials make a server unavailable but do not block a workflow. Never put
+secrets in the committed `.mcp.json`.
+
+## Configuration and Trust
+
+`aidlc config` is local-only and transactional. It writes the selected harness
+runtime, creates the `aidlc/` workspace, merges managed project integrations,
+and records an ownership baseline for later refreshes.
+
+Preview any change:
+
+```bash
+aidlc config --dry-run
+```
+
+After config, complete any action named in its output:
+
+| Harness | Typical action |
+| --- | --- |
+| Claude Code | If Claude Code is already open in this folder, exit it and start it again |
+| Kiro CLI | Start `kiro-cli chat`; the project selects the AI-DLC agent |
+| Kiro IDE | Open the configured project, then choose **aidlc** in the chat panel's agent picker |
+| Codex CLI | Approve the hook trust prompt or apply the generated trust seed |
+| Cursor | Open the configured project or run `agent` |
+| opencode | Start `opencode` in the project |
+| GitHub Copilot | Trust the project folder |
+
+In Kiro IDE, the **aidlc** agent appears in the agent picker only after you
+trust the folder and reload the window: if the Restricted Mode banner shows,
+select **Manage** on it, then **Trust**, and run **Developer: Reload Window**
+(see [First run](harnesses/kiro-ide.md#first-run)).
+
+Run `aidlc doctor` after completing the action. It reports runtime, project,
+provider, hook, trust, and workflow-state problems with a remediation command.
+
+## Updating
+
+`aidlc update` updates the machine runtime. It does not rewrite configured
+projects. Refresh each project; open work carries on:
+
+```bash
+aidlc update
+cd /path/to/your-project
+aidlc doctor
+aidlc config
+```
+
+Config preserves project-owned content, and a refresh while a workflow is open
+is done and says whether that work carries on. Projects using plugins should run
+`/aidlc plugin sync` after an engine refresh.
+
+For version selection, project pins, offline installation, mirrors, custom CAs,
+release authentication, automation, and uninstall, see
+[Install and Lifecycle](18-install-and-lifecycle.md).
+
+## What Config Creates
+
+A configured project contains the harness integration plus an `aidlc/`
+workspace. The first workflow creates an intent record under:
+
+```text
+aidlc/spaces/<space>/intents/<YYMMDD>-<label>/
+```
+
+That record contains workflow state, audit shards, questions, decisions, and
+stage artifacts. Team knowledge and learned rules live at the space level so
+later intents can reuse them.
+
+See [Spaces and Intents](03-spaces-and-intents.md) for the layout and
+[State and Audit](10-state-and-audit.md) for the recorded evidence.
+
+## Troubleshooting
+
+Start with:
+
+```bash
+aidlc doctor
+```
+
+Then use [Troubleshooting](15-troubleshooting.md) for hooks, provider access,
+approval gates, stale state, and diagnostics. Harness-specific setup problems
+belong in the matching [harness guide](harnesses/README.md).
+
+## Next Steps
+
+- [Onboarding: A Guided First Week](onboarding.md) - the mental model and a guided five-run path for first-time teams
+- [Workflow Profiles](workflow-profiles.md) - choose the right workflow
+- [Your First Workflow](02-your-first-workflow.md) - follow a complete run
+- [Spaces and Intents](03-spaces-and-intents.md) - understand project state
+- [Interaction Modes](07-interaction-modes.md) - work with questions and gates
+- [Install and Lifecycle](18-install-and-lifecycle.md) - manage the native runtime

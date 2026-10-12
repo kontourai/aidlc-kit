@@ -1,0 +1,207 @@
+# Question Rendering — Codex CLI harness annex
+
+This file defines how THIS harness renders the structured questions that
+`{{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol.md` section "Structured questions" requires.
+The protocol and stage files are harness-neutral: they say *present a
+structured question* and carry a fenced ` ```question ` spec block. This annex
+is the one place that binds that contract to a concrete mechanism.
+
+## Never echo the spec (non-negotiable)
+
+A ` ```question ` fenced block is **INPUT to this annex's rendering, never
+output to paste**. The orchestrator MUST render every ` ```question ` spec
+THROUGH the mechanism below (the `request_user_input` tool when available, else
+numbered prose), and MUST NEVER echo, print, paste, or "quote back" the fenced
+block, or any of its field lines (`prompt:`, `header:`, `multiSelect:`,
+`options:`, `label:`, `description:`), into the chat transcript. The user must
+never see the raw fence; they see only the native prompt or the numbered-prose
+rendering.
+
+Echoing the fence as literal text is a **protocol violation**, not a stylistic
+choice. It:
+
+- produces a non-interactive wall of text with no answerable prompt;
+- drops the "None of the above" / "Other" escape the rendering provides;
+- is inconsistent with every correct rendering elsewhere in the same session.
+
+If you find yourself about to write a triple-backtick `question` block into your
+reply, STOP: that content is a spec to render, not message body.
+
+This applies to **every** structured-question site, including but not limited to:
+
+- approval gates (every stage completion);
+- the questions interaction-mode choice (Guide me / I'll edit the file / Chat),
+  when `directive.answer_mode.ask` is true (otherwise print its one-line
+  `notice` and use `answer_mode.mode`; stage-protocol.md §3 Step 2);
+- the ladder prompt (autonomy mode after the walking skeleton);
+- halt-and-ask on Bolt failure (Retry / Skip / Abort);
+- consolidated-summary confirmation before artifact generation;
+- the §13 learnings gate (keep / heading / promote-to-team).
+
+(Literal ` ```question ` fences legitimately remain in framework documentation
+like THIS file and the stage-protocol because they are authoring specs, not chat
+output. In the stage-protocol those specs are normative prompt templates: when
+the surrounding instruction requires a question, their content MUST be rendered
+through this annex. This annex's mapping examples are illustrative. The
+prohibition is about echoing raw fences in live orchestration turns.)
+
+## Mechanism (two-track, D-3)
+
+Codex CLI has a structured-question tool — `request_user_input` — behind the
+shipped config flags (`[tools] experimental_request_user_input` +
+`[features] default_mode_request_user_input`). It is the PRIMARY track; the
+prose track below is the permanent floor for sessions where the tool is
+unavailable (flag off, older Codex, headless exec).
+
+### Track 1 — request_user_input (when the tool is available)
+
+Map the spec fields 1:1:
+
+| Spec field | request_user_input field |
+|------------|--------------------------|
+| `prompt` | the question text |
+| `header` | the question header |
+| `options[].label` | option label |
+| `options[].description` | option description |
+
+- When a question has a recommended option, list it FIRST and append
+  "(Recommended)" to its label — the tool renders recommended-first natively.
+- The tool auto-appends a "None of the above" escape with a notes field — do
+  NOT add an explicit Other option to the tool call. Name it as shown when you
+  mention it to the person: "Pick "None of the above" on any question and add
+  your own words in its notes (Tab), or tell me what you'd like to talk
+  through." (Questions *files* still
+  end every question with `X. Other (please specify)` per protocol §3 — the
+  file format is harness-neutral.)
+- Limits: 1–3 questions per call, 2–3 options each. For 4+ options, split
+  across calls (options A–C, then D+); the questions file retains the full
+  option set as the authoritative record.
+- **Answer capture**: the selection returns as the exact option label; record
+  it verbatim (protocol: never summarize User Input).
+- **No answer**: the box runs out after about two minutes and returns no
+  answers. Nothing was answered: ask the same question again in your reply as
+  numbered prose, not in the box, and end the turn; never pick an answer for
+  the person.
+
+### Track 2 — numbered prose (the floor)
+
+If the tool is unavailable (it errors, is not in your tool list, or the
+session is headless), render the spec as numbered prose options and let the
+user answer with a number or free text:
+
+```question
+prompt: "[Stage Name] complete. How would you like to proceed?"
+header: Approval
+multiSelect: false
+options:
+  - label: Approve
+    description: Continue to [next stage]
+  - label: Request Changes
+    description: Provide revision feedback
+```
+
+becomes:
+
+```
+**Approval** — [Stage Name] complete. How would you like to proceed?
+
+1. **Approve** — Continue to [next stage]
+2. **Request Changes** — Provide revision feedback
+3. **Other** — describe what you want instead
+
+Reply with a number (or just tell me).
+```
+
+## Mandatory consolidated-summary checkpoint
+
+This checkpoint applies only when `directive.ceremony.summary_confirmation === "on"`. When it is `"off"`, generate directly from the answers: no summary-confirmation prompt, confirmation entry, or receipt. Required stage questions and other human decisions, including Plan Approval and the stage approval gate, are unchanged.
+
+After guided or chat file-backed Q&A (and whenever a stage definition requires
+it explicitly, such as Requirements Analysis), the stage protocol requires a
+separate confirmation before any stage artifact is generated. Append or update
+`## Consolidated Summary Confirmation` in the questions file with the summary,
+the prompt, both options without A/B file-letter prefixes, and a blank
+`[Answer]:` tag.
+
+Render the protocol's **Confirm** question through the active track, with the
+summary bullets where the person reads them. With `request_user_input`, the
+question's text is the summary bullets, a blank line, then the prompt, and the
+two semantic options map directly; the tool supplies its own escape. On the
+numbered-prose floor, render the bullets right above it in the same message:
+
+```
+- <each answer, as a summary bullet>
+
+**Confirm** — Does this all look correct before I generate the artifact?
+
+1. **Looks correct** — Generate the artifact from these answers
+2. **Request changes** — Revise one or more answers before generation
+3. **Other** — describe what you want instead
+
+Reply with a number (or just tell me).
+```
+
+This is a mandatory human checkpoint, not the stage approval gate. Before
+rendering it, run the checkpoint-specific `aidlc-log.ts decision` command from
+`SKILL.md`, including the exact `--questions-file` and any `--unit` / `--single`
+identity. END THE TURN after presenting it and wait for the user's response.
+Then persist `[Answer]: Looks correct` or `[Answer]: Request changes` exactly,
+regardless of which track rendered the question, and run the matching
+checkpoint-specific `aidlc-log.ts answer` command. Strip any source letter,
+numbered-prose index, punctuation, and option description before writing:
+`[Answer]: A. Looks correct`, `[Answer]: 1. Looks correct`, `[Answer]: A`,
+`[Answer]: 1`, and a self-selected answer are invalid. On Request changes, when their reply
+already says what should change, those words are the feedback; otherwise ask
+**"What should change?"** and END THE TURN again, and do not update any answer
+until that feedback arrives. Then record the feedback, update the affected
+answers, reset this tag to blank, and present the consolidated summary again.
+Do not generate the artifact until the file contains the human's explicit
+`[Answer]: Looks correct` and the receipt command succeeds. Never merge this
+checkpoint with the later reviewer, learnings, or approval steps.
+
+Rules (both tracks):
+
+- **Approval gate `[next stage]`**: on an approval question, render the
+  `Continue to [next stage]` placeholder from the `next_stage` field verbatim
+  (e.g. `Continue to NFR Requirements`): the one on the reply that opened the
+  gate (`report --result awaiting-approval` or `revised`), which includes any
+  plan change made during the stage, else the run-stage directive's. Render
+  `Complete workflow` when `next_stage` is null. Never guess the next stage.
+- **No emergent options**: render exactly the spec's options (+ the escape).
+  The NO EMERGENT BEHAVIOR rule applies to the rendering, not just the spec.
+- **Prose response keys**: on Track 2, start every question at `1`, independent
+  of numbered content earlier in the message or another question in the batch.
+  Use unordered bullets for immediately preceding summaries. Visible `1` maps
+  to the first source option label, `2` to the second, and so on.
+- **multiSelect: true** → prose track says "Reply with all numbers that apply
+  (e.g. 1, 3)."
+- A free-text reply that clearly matches an option counts as that option.
+  A reply in their own words that answers the question is their answer:
+  record it as the "Other" answer, in their words. Only a reply that asks
+  about the question or wants to talk it through is discussed first; then
+  take what they settle on.
+- Gate semantics live in the ENGINE either way - the rendering never decides.
+  Every engine ask carries `ask_type` and `response_route`. A `"next"` route
+  uses the chosen `confirm_command` / `compose_command`, or the
+  `scope_commands` entry whose `scope` equals the selected plan (a name with no
+  entry is not a valid scope). Keep `--request <8hex id>` intact and never
+  append the request text. The ask names the request only by id (a pasted
+  `<document>` block stays in the question store as data),
+  while the question uses at most 240 characters, ending in `...` when truncated.
+  For `intent-pick`, match the chosen exact `available_intents` selector to
+  `select_commands[].selector` and execute that entry's complete `command`
+  verbatim; never interpolate a selector. `new-work-routing` carries its routes
+  as fields: `new_intent_command` (or a `scope_commands` entry for a corrected
+  scope), `compose_command`, and `continue_command` for the active workflow or,
+  with `available_intents`, per-record `select_commands` and `reshape_commands`. Run them verbatim and
+  retain the `--request` id through selection or composition. Existing intents with no selected cursor and
+  pending work receive this ask on every harness, including after scope
+  confirmation; only no-pending selection uses `intent-pick`.
+  A `"command"` route runs `resume_command` only when the human chooses to
+  resume, then re-runs `next`; otherwise it waits for their direction. `"claim"`
+  follows the Unit claim flow. `"execute-remedy"` offers only executable guard
+  remedies and follows the human-selected command or action, never an invented
+  report. Empty remedies remain terminal. A redo, jump, or start-fresh request
+  on re-entry is the sole non-stage report round-trip and uses
+  `report --result resumed --choice <redo|jump|fresh>`; this is not a generic
+  engine-ask answer route. Explicit guard-remedy stage reports are unchanged.

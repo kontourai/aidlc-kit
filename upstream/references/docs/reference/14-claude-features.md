@@ -1,0 +1,401 @@
+# Harness Primitives Mapping
+
+AI-DLC's methodology concepts are harness-neutral; each CLI harness expresses
+them through its own native primitives. This chapter maps the AI-DLC concept to
+the primitive each harness uses, then details the **Claude Code** expression in
+depth (it is the most fully documented harness; Kiro CLI, Kiro IDE, Codex,
+opencode, GitHub Copilot, and Cursor express the same concepts through their
+own equivalents, summarised per chapter in
+[Running on other harnesses](../guide/harnesses/README.md), and the source
+contract for adding a harness is [Porting to a New Harness](../harness-engineering/09-porting-to-a-new-harness.md)).
+
+For hooks: see [Hooks and Tools](06-hooks-and-tools.md). For knowledge: see [Knowledge System](10-knowledge-system.md).
+
+---
+
+## Concept-to-primitive mapping (per harness)
+
+The AI-DLC concept is the constant; the primitive that carries it is the
+harness parameter. Add a column when you port to a new harness.
+
+| AI-DLC Concept | Claude Code | Kiro CLI | Kiro IDE | Codex CLI | opencode | GitHub Copilot | Cursor |
+|----------------|-------------|----------|----------|-----------|----------|----------------|--------|
+| **Orchestrator entry** (`/aidlc` + runners) | Skills (`/aidlc`) | Skills (`/aidlc`) | Skills (`/aidlc`) | Skills (`$aidlc`) | Command → skill (`/aidlc`; skills from `.aidlc/skills` via `skills.paths`) | Skills (`/aidlc`; `.github/skills/`) | Native skills (`/aidlc` plus `/aidlc-status`, `/aidlc-jump`, `/aidlc-scope`; `.cursor/skills/`) |
+| **Agent personas** (14 total) | `.claude/agents/*.md` | `.kiro/agents/*.json` + persona `.md` | Conductor `agents/aidlc.md` + 14 persona `.md` files with `tools:`/`permissions.rules` | `.codex/agents/` TOMLs | `.opencode/agents/*.md` (subagents) + persona `.md` | `.github/agents/*.md` (custom agents) + persona `.md` | `.cursor/agents/*.md` (native subagents) |
+| **Automation** (audit, state, tracking) | Hooks via `settings.json` | Hooks via `agents/aidlc.json` | `.kiro/hooks/aidlc-*.json` (v2 hook files, Kiro IDE 1.x and Kiro CLI v3) | Hooks via `.codex/hooks.json` (one adapter) | Adapter plugin (`.opencode/plugin/`) | Hooks via `.github/hooks/aidlc.json` (one adapter) | Hooks via `.cursor/hooks.json` (one adapter) |
+| **Standing rules** (the layer chain) | `aidlc/spaces/<active-space>/memory/` (via `.claude/rules/aidlc.md` @-import stub) | `aidlc/spaces/<active-space>/memory/` (via agent resources) | `aidlc/spaces/<active-space>/memory/` (via always-included steering live references) | `aidlc/spaces/<active-space>/memory/` (via `AIDLC_RULES_DIR`) | `aidlc/spaces/<active-space>/memory/` (via `instructions` glob) | `aidlc/spaces/<active-space>/memory/` (via `AGENTS.md` @-imports) | `aidlc/spaces/<active-space>/memory/` (always-applied `rules/aidlc.mdc` standing pointer + four agent-decided phase pointers) |
+| **Harness onboarding doc** | `.claude/CLAUDE.md` (full) | `.kiro/steering/aidlc-onboarding.md` (agent resource) | `.kiro/steering/aidlc-onboarding.md` (always-included) | `.codex/onboarding.md` (`developer_instructions` in trusted project `.codex/config.toml`) | `.aidlc/onboarding.md` (`instructions`) | `AGENTS.md` (full, with `@`-imports) | `.cursor/rules/aidlc-onboarding.mdc` (always-applied) |
+| **Permissions / config** | `.claude/settings.json` | `.kiro/settings/cli.json` + agent config | Agent `.md` `tools:` + `permissions.rules` frontmatter; `.kiro/settings/cli.json` pins the Kiro CLI engine | `.codex/config.toml` (+ Starlark `rules/`) | `opencode.json` (project root) | `trustedFolders` (`~/.copilot/config.json`) + `--allow-tool` flags | `.cursor/cli.json` (permissions) + `.cursor/hooks.json` |
+
+Kiro CLI, Kiro IDE, Codex, opencode, and Cursor share a byte-identical,
+harness-neutral root `AGENTS.md` block; native setup lives at the paths above.
+Copilot keeps its full root onboarding exclusive, while Claude's full onboarding
+stays inside `.claude/`. Shared onboarding does not permit engine-directory collisions.
+
+The deterministic engine, state machine, audit log, stage graph, and swarm
+referee underneath are byte-identical across every harness — only the primitives
+that carry them differ. The rest of this chapter documents the **Claude Code**
+expression of each primitive in detail; for the Kiro CLI, Kiro IDE, Codex,
+opencode, Copilot, and Cursor
+equivalents see their guide chapters.
+
+---
+
+## Claude-specific
+
+The sections that follow describe how Claude Code in particular expresses each
+primitive — its skill frontmatter, agent loading modes, `settings.json` blocks,
+and `.mcp.json` model. The other harnesses carry the same concepts through the
+primitives in the table above; where a mechanic is Claude-only (the
+`companyAnnouncements` welcome message, the statusline command, the
+`AskUserQuestion` gate widget), it is called out as such.
+
+---
+
+## Skills
+
+### SKILL.md as Entry Point
+
+The orchestrator lives at `.claude/skills/aidlc/SKILL.md`. Users invoke it with the `/aidlc` command. The file uses YAML frontmatter to declare metadata:
+
+```yaml
+---
+name: aidlc
+description: >
+  AI-DLC workflow orchestrator. Start, resume, or manage an AI-driven
+  development lifecycle.
+argument-hint: "[description | --status | --config [section] | --stage <slug|#> | --phase <name|#> | --help]"
+user-invocable: true
+---
+```
+
+The orchestrator's frontmatter carries no `hooks:` block. As of v0.6.0 every framework hook is registered project-wide in `settings.json` (the hooks-move, Fork 2→B), so the orchestrator and every packaged or hand-written runner inherit the deterministic spine without copying a per-runner `hooks:` block.
+
+| Field | Purpose |
+|-------|---------|
+| `name` | Registers the skill as `/aidlc` in Claude Code's command system |
+| `description` | Displayed in skill discovery and help text |
+| `argument-hint` | Placeholder text shown after `/aidlc` to indicate accepted arguments |
+| `user-invocable` | Set to `true` so the user can trigger it directly |
+
+The body of SKILL.md is a thin forwarding loop — the conductor. It calls the orchestration engine (`aidlc-orchestrate next`), acts on the typed directive it returns (run a stage, ask a question, fan out a swarm), reports the outcome (`report`), and repeats. The between-stage decisions — session detection, scope-to-stage mapping, the stage graph, routing, and stage advancement — live in the engine and the compiled data it reads (`tools/data/stage-graph.json`, `scope-grid.json`), not in this file. See [Engine and Skill System](17-skill-system.md).
+
+### Project-Wide Hooks
+
+All framework hooks are registered project-wide in `settings.json` (the workflow-spine hooks join the session-lifecycle and statusline hooks there). Each hook **self-gates** — it early-exits when no workflow is active — so they no-op during normal Claude Code usage outside of AI-DLC. See [Hooks and Tools](06-hooks-and-tools.md) for full details.
+
+### Companion Files
+
+SKILL.md references the shared protocol family and stage files:
+
+- **`aidlc-common/protocols/stage-protocol.md`** -- Mandatory static protocol for all 33 stages.
+- **Conditional protocol modules** -- reviewer, ensemble, Construction, swarm, recovery, and governance files loaded only when their trigger fires.
+- **Stage files** in `stages/initialization/`, `stages/ideation/`, `stages/inception/`, `stages/construction/`, `stages/operation/` -- 33 individual stage definitions.
+
+---
+
+## Agents
+
+### Agent File Format
+
+This implementation renders AI-DLC's agent roles as flat `.md` files in `.claude/agents/` — 14 files: the 11 domain-expert personas, 2 review-only agents (product-lead, architecture-reviewer), and the adaptive-workflows composer. Each uses YAML frontmatter followed by a markdown body. The frontmatter controls Claude Code's behavior when the agent is activated; the body provides persona, responsibilities, collaboration patterns, relevant memory focus, and key principles. The packager injects a compact mandatory delegated-knowledge preflight into the projected file.
+
+For full agent system documentation, see [Agent System](05-agent-system.md).
+
+### Inline vs Subagent Loading
+
+The conductor uses two modes of agent activation - persona adoption and Task dispatch - across the four stage topologies:
+
+**Inline execution (29 of 33 stages):**
+The conductor reads the agent's `.md` file and adopts the persona directly within the main conversation. The user interacts with the agent in real time.
+
+**Dispatched execution (4 stages: 2.1 pipeline, 2.2 subagent, 2.4 mob, 3.5 subagent):**
+The conductor delegates to separate Claude instances via the Claude Code Task tool. Each dispatched agent runs in isolation, receives context via the prompt, and returns a structured summary; ensemble collaborators additionally write contribution files the lead integrates.
+
+| Stage | Claude Code Subagent Type | Agent | Reason |
+|-------|---------------------------|-------|--------|
+| 2.1 Reverse Engineering | `aidlc-developer-agent` then `aidlc-architect-agent` (pipeline, 2-link chain) | aidlc-developer-agent + aidlc-architect-agent | Deep code analysis produces large intermediate output |
+| 2.2 Practices Discovery | lead, three parallel support spokes, lead integration (subagent hub-and-spoke) | pipeline-deploy + quality + developer + devsecops | Independent practice evidence, human interview, then controlled integration |
+| 2.4 User Stories | product lead plus parallel design/developer/quality mob | 4 participants | Bounded collaborative story elaboration with human judgment |
+| 3.5 Code Generation | `aidlc-developer-agent` | aidlc-developer-agent | Code writing benefits from clean context focused on the unit specification |
+
+Workspace detection (0.2) used to be a subagent; it now runs deterministically inside `aidlc-utility intent-create`.
+
+### Agent Tiers (projected model + effort)
+
+The authored dial on every agent is `tier:`; the packager projects it into the `model:`/`effort:` frontmatter keys Claude Code reads. Previous behaviour (v2.2.15 through v2.2.19; before that the key was the inert `modelOverride:`) pinned `model: opus` on the nine judgment-shaped agents, which forcibly downgraded sessions running a bigger model.
+
+| Tier | Agents | Claude Code projection | Rationale |
+|------|--------|------------------------|-----------|
+| `judgment` | architect, product, design, developer, quality, devsecops, compliance, aws-platform, composer (9) | `model: inherit`, no `effort:` line - the session's model and effort win | Multi-constraint reasoning whose decisions cascade downstream - architectural boundaries, intent interpretation, UX trade-offs, code synthesis, threat prioritisation, regulatory edge-cases, cloud architecture |
+| `balanced` | architecture-reviewer, product-lead (2) | `model: sonnet`, `effort: medium` | Review against an explicit checklist; the measured reviewer baseline is the one disclosed shipped step-down |
+| `templated` | delivery, pipeline-deploy, operations (3) | `model: inherit`, no `effort:` line | Output is dominantly templated planning tables, CI/CD YAML, or observability/runbook scaffolding; the tier remains a Writing up dial group, while the shipped baseline inherits |
+
+An omitted `effort:` key inherits the session effort, and a pinned one overrides the session in both directions (a pin is a cap, not a floor). Judgment and templated inherit by default; balanced pins the measured reviewer baseline. Use `aidlc config models` to record a per-install Writing up downgrade. The full per-harness projection table and the `tier_cap` override live in [Agent System](05-agent-system.md).
+
+---
+
+## Rules
+
+### The layered rule files
+
+This implementation reads behavioral rules from the active space memory layer at `aidlc/spaces/<active-space>/memory/`, pulled into Claude's context via the `.claude/rules/aidlc.md` @-import stub, which imports the engine's git-ignored copy of those files at `aidlc/active-memory/` (written at session start and on a space switch, so a switch changes no tracked file). One file per layer of the inheritance chain:
+
+```
+aidlc/spaces/<active-space>/memory/
+├── org.md                        # framework defaults (shipped)
+├── team.md                       # this team's affirmed practices
+├── project.md                    # this project's specialization
+└── phases/                       # rules scoped to a phase
+    ├── ideation.md
+    ├── inception.md
+    ├── construction.md
+    └── operation.md
+```
+
+Each file carries topical `##` headings (Way of Working, Testing Posture, Deployment, Code Style, Forbidden, Mandated, and so on). At workflow start the compile resolver walks the chain **org → team → project → phase → stage** and bakes the resolved rule set onto each stage's graph node. The model is **strict-additive**: every applicable rule from every layer appears in the agent's context simultaneously — a narrower layer never silently overrides a broader one. For kept learnings, the admission protocol asks the orchestrator to compare proposed text with broader policy through an LLM check before the deterministic writer runs. That check is an audit aid rather than a writer-enforced boundary; runtime does not reconcile conflicts. The authoritative layout, scope derivation, and conflict semantics are in [Rule System](08-rule-system.md).
+
+**Why the org/team files stay lean:** Claude Code loads the space memory files (via the `.claude/rules/aidlc.md` @-import stub) into each conversation, including non-AI-DLC ones. Keeping the shipped layers to concise, topical structure avoids polluting regular development sessions. Detailed methodology that the upstream specification places in rules instead lives in `.claude/knowledge/aidlc-shared/` or in SKILL.md and stage-protocol.md, loaded only when `/aidlc` is active.
+
+### The Learning Loop
+
+The rule files are not static — the v0.5.0 learning loop turns an in-workflow correction into a standing rule for next time. The division of labor is deliberate: the LLM writes observations to the stage's `memory.md` diary while the stage runs (Interpretations / Deviations / Tradeoffs / Open questions), and the orchestrator later performs the admission comparison. Candidate extraction and persistence are deterministic tools; selections and conflict disposition are human decisions:
+
+1. **Diary (LLM).** During the stage, observations accumulate in the intent's record dir at `<record>/<phase>/<stage>/memory.md` (`<record>/` = `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`).
+2. **Surface (tool).** At the approval gate, `aidlc engine learnings surface` reads the diary and emits structured candidates — the LLM does not re-parse or classify.
+3. **Confirm (human).** The conductor renders the candidates; you pick which to keep and, for free-text additions, pick the single heading that derives the destination.
+4. **Admission check (orchestrator LLM).** The orchestrator compares each kept learning against `org.md`'s matching section; a contradiction is surfaced for you to revise, skip, or escalate.
+5. **Persist (tool).** `{{INVOKE}} engine learnings persist` accepts the resulting selections without reading `org.md`, writes each confirmed learning as a practice to `aidlc/spaces/<active-space>/memory/{project,team}.md` as dated entries and, for a sensor-binding learning, installs the manifest plus the stage `sensors:` import inside one locked transaction. It emits `RULE_LEARNED` / `SENSOR_PROPOSED`.
+
+The user-facing walk-through (with a worked example) is in [Rules and the Learning Loop](../guide/09-rules-and-the-learning-loop.md); the harness-engineer authoring angle is in [Rules and the Learning Loop](../harness-engineering/05-rules-and-the-loop.md).
+
+---
+
+## CLAUDE.md
+
+### Project-Level Instructions
+
+`.claude/CLAUDE.md` provides project-level instructions loaded into every conversation. For AI-DLC, it serves as the bootstrap document.
+
+**Key sections:**
+
+| Section | Contents |
+|---------|----------|
+| Prerequisites | Self-contained `aidlc`; atomic filesystem locking |
+| AI-DLC Structure | Skill, agent, rules, knowledge, and hook locations |
+| Conventions | Artifacts go to the intent's record dir under `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`; application code goes to workspace root |
+| Session Resumption | Check for `aidlc-state.md` on startup and carry on from the checkpoint |
+| Git Integration | Commit policy (see below) |
+
+### Git Integration
+
+```
+Commit: aidlc/ workspace (memory layer, intents registry, per-intent
+        aidlc-state.md, audit/ shards, and stage artifacts)
+Gitignore:
+  - aidlc/active-space, aidlc/spaces/*/intents/active-intent  (per-user cursors)
+  - aidlc/.aidlc-clone-id, aidlc/.aidlc-sessions/             (machine-local)
+  - aidlc/spaces/*/intents/*/runtime-graph.json              (re-derivable)
+  - aidlc/spaces/*/intents/*/.aidlc-*                          (incl. .aidlc-engine/recovery.md)
+```
+
+The audit trail is committed as **per-clone shards** (`audit/<host>-<clone>.md`): each clone appends to its own shard, so concurrent appends never git-conflict. Per-user session cursors and machine-local derived state are ignored.
+
+---
+
+## Settings
+
+### Permissions Configuration
+
+`.claude/settings.json` pre-approves Claude Code tools so workflows run without per-invocation permission prompts:
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "Edit(/**)",
+      "Bash(bun .claude/tools/aidlc.ts engine *)",
+      "Bash(bun .claude/tools/aidlc.ts doctor)", "...",
+      "Bash(bun .claude/tools/aidlc-log.ts)", "Bash(bun .claude/tools/aidlc-log.ts *)", "...",
+      "Task", "WebSearch"
+    ]
+  }
+}
+```
+
+Without this, Claude Code would prompt "Allow this tool?" on each first use, disrupting the workflow -- particularly during subagent delegation where the user is not directly interacting.
+
+### Status Line Configuration
+
+```json
+"statusLine": {
+  "type": "command",
+  "command": "aidlc engine statusline"
+}
+```
+
+Runs periodically (not just on tool use) to keep the terminal status current.
+
+### SessionStart and SessionEnd Hook Configuration
+
+```json
+"hooks": {
+  "SessionStart": [{
+    "matcher": "",
+    "hooks": [{
+      "type": "command",
+      "command": "aidlc engine hook session-start"
+    }]
+  }],
+  "SessionEnd": [{
+    "matcher": "",
+    "hooks": [{
+      "type": "command",
+      "command": "aidlc engine hook session-end"
+    }]
+  }]
+}
+```
+
+Registered in `settings.json` (project-wide) — as are all framework hooks since the v0.6.0 hooks-move. Session lifecycle events must be project-wide regardless, because they fire before `/aidlc` activates and after it exits: `session-start.ts` injects resume context, `session-end.ts` emits `SESSION_ENDED` for audit completeness.
+
+### Personal Settings Override
+
+`.claude/settings.local.json` (gitignored) overrides shared settings without affecting the repository:
+
+```bash
+cp .claude/settings.local.json.example .claude/settings.local.json
+```
+
+---
+
+## MCP Servers
+
+### .mcp.json as the Server Registry
+
+This implementation declares its Model Context Protocol (MCP) servers in `.mcp.json` at the project root, beside `.claude/` rather than inside it. The file maps server names to their transport and launch configuration:
+
+```json
+{
+  "mcpServers": {
+    "context7": {
+      "type": "http",
+      "url": "https://mcp.context7.com/mcp",
+      "headers": {
+        "CONTEXT7_API_KEY": "${CONTEXT7_API_KEY}"
+      }
+    },
+    "aws-mcp": {
+      "command": "uvx",
+      "args": [
+        "mcp-proxy-for-aws@latest",
+        "https://aws-mcp.us-east-1.api.aws/mcp",
+        "--metadata",
+        "AWS_REGION=us-east-1"
+      ]
+    },
+    "aws-pricing": { "command": "uvx", "args": ["awslabs.aws-pricing-mcp-server@latest"] },
+    "aws-iac": { "command": "uvx", "args": ["awslabs.aws-iac-mcp-server@latest"] },
+    "aws-serverless": { "command": "uvx", "args": ["awslabs.aws-serverless-mcp-server@latest"] }
+  }
+}
+```
+
+The five shipped servers cover the integrations the framework's agents reach for:
+
+| Server | Transport | Auth | Purpose |
+|--------|-----------|------|---------|
+| `context7` | HTTP | `${CONTEXT7_API_KEY}` env passthrough | Library/SDK documentation lookups |
+| `aws-mcp` | `uvx` (`mcp-proxy-for-aws@latest`, `AWS_REGION=us-east-1`) | Standard AWS credential chain | AWS API access |
+| `aws-pricing` | `uvx` (`awslabs.aws-pricing-mcp-server@latest`) | AWS credential chain | AWS pricing |
+| `aws-iac` | `uvx` (`awslabs.aws-iac-mcp-server@latest`) | AWS credential chain | Infrastructure-as-code tooling |
+| `aws-serverless` | `uvx` (`awslabs.aws-serverless-mcp-server@latest`) | AWS credential chain | Serverless tooling |
+
+The registry carries only environment-variable placeholders — no committed secrets. Credentials flow through your shell: `context7` reads `CONTEXT7_API_KEY` from the environment, and the four `uvx`-launched AWS servers authenticate against your standard AWS credential chain (install `uv`/`uvx` via `curl -fsSL https://astral.sh/uv/install.sh | sh`). A server you have no credentials for is simply unavailable to the session and never blocks a workflow.
+
+`.mcp.json` lives at the project root because that is the path Claude Code reads for project-scoped MCP servers. This implementation currently ships as a `.claude/` directory copy rather than a Claude Code plugin, but the project-root `.mcp.json` placement is also the canonical plugin location, so the registry is plugin-portable without change.
+
+### Provisioning and Inheritance
+
+The access model is provisioning followed by inheritance, with no grant step between them:
+
+1. **Declare once.** Servers are listed in `.mcp.json` at the project root.
+2. **Provision to the session.** Claude Code starts the declared servers and exposes their tools to the session as `mcp__<server>__<tool>` ids.
+3. **Inherit everywhere.** Subagents inherit all session MCP tools by default. Every AI-DLC agent — whether running inline or as a delegated subagent (the dispatched stages 2.1, 2.2, 2.4, 3.5 and their collaborators) — reaches every declared server.
+
+There is no per-agent grant step, and none is needed: inheritance is the default and it is additive across all agents. A new agent file gains MCP access by existing, not by listing servers in its frontmatter.
+
+### Why There Is No Per-Agent Grant
+
+This is the load-bearing lesson, and it is worth stating plainly so it is not re-litigated. **MCP access cannot be granted to an agent by addition — it is inherited, and the only lever is restriction.** An empirical spike against Claude Code 2.1.159 established the boundaries:
+
+- An agent gains nothing by *naming* a server in its frontmatter. There is no additive grant field. Inheritance has already given the agent every session MCP tool.
+- To *prevent* an agent from using a server, narrow its `tools:` allowlist (the real Claude Code frontmatter field) to the fully-qualified `mcp__<server>__<tool>` ids it is permitted to call. Omitting a tool from a populated `tools:` list is what denies it.
+- A bare `mcp__<server>` token is **not** honored — there is no server-level wildcard. Only fully-qualified `mcp__<server>__<tool>` ids match.
+- `disallowedTools` is a real, working field on the denylist side. This implementation uses `disallowedTools: Task` to block nested subagent spawning; that denial does not affect MCP server access.
+
+The spike also surfaced a separate frontmatter footgun: `allowedTools` is **not** a recognized Claude Code subagent field and is silently ignored. An agent declaring `allowedTools: Read` still reached an MCP tool, behaving identically to inherit-all, whereas the same agent with `tools: Read` correctly denied it. The resolution (v0.5.4): the silently-ignored `allowedTools` field has been removed from every shipped agent file (`.claude/agents/*.md`). The agents now intentionally inherit the full session toolset — built-in tools and MCP tools alike — and the only declared restriction is `disallowedTools: Task`. The documented opt-in narrowing is the real `tools:` allowlist, which drops inherited MCP unless the fully-qualified `mcp__<server>__<tool>` ids are also listed. So inherit-all is now the deliberate, documented model rather than an accident of an ignored field: every agent reaches every declared server today.
+
+### Relationship to settings.json Permissions
+
+The two configuration files answer different questions and do not overlap:
+
+- `.claude/settings.json` `permissions.allow` pre-approves *built-in Claude Code tools* (file edits inside the project, AI-DLC's own commands, Task, WebSearch) so the session does not prompt on first use (see [Settings](#settings) above). It says nothing about MCP servers.
+- `.mcp.json` declares *which MCP servers exist* and how to launch them. Provisioning and inheritance are governed by Claude Code's MCP layer, not by `settings.json`.
+
+An MCP server appearing in the session is a function of `.mcp.json` plus available credentials, not of any `settings.json` allow-list entry. Per-agent narrowing, when it is wired, lives in the agent's `tools:` frontmatter — not in `settings.json` and not in `.mcp.json`.
+
+---
+
+## Feature Interaction Map
+
+| Feature | File(s) | When It Loads | Role |
+|---------|---------|---------------|------|
+| CLAUDE.md | `.claude/CLAUDE.md` | Every conversation | Bootstrap: structure, prerequisites, conventions |
+| Settings | `.claude/settings.json` | Every conversation | Pre-approve Claude Code tools |
+| Rules | `aidlc/spaces/<active-space>/memory/*.md` (via `.claude/rules/aidlc.md` @-stub) | Every conversation | Minimal guardrails; self-learning corrections |
+| Skill | `.claude/skills/aidlc/SKILL.md` | On `/aidlc` invocation | Orchestrator: session, scope, stage graph, delegation |
+| Skill annex | `.claude/skills/aidlc/composer.md` | When the engine's print names the composer agent | Composing a workflow plan: the dispatch, the proposal gate, what approval runs |
+| Workflow-spine hooks | `.claude/settings.json` | Always on; self-gate when no workflow | PostToolUse, PreCompact, SubagentStop, Stop |
+| Agents (inline) | `.claude/agents/*.md` | Persona activation | 29 of 33 stages: conductor adopts agent persona |
+| Agents (dispatched) | `.claude/agents/*.md` | Task tool delegation | 4 stages (2.1 pipeline, 2.2 subagent, 2.4 mob, 3.5 subagent): isolated execution |
+| Knowledge (Tier 1) | `.claude/knowledge/` | Persona activation (steps 2-3) | 56 methodology reference files |
+| Knowledge (Tier 2) | space-level `aidlc/knowledge/` (sibling of `intents/`) | Persona activation (steps 4-5) | Team-managed customization |
+| Stage protocol | `stage-protocol.md` + conditional modules | Static core every stage; modules on trigger | Mandatory behavioral contract |
+| Stage files | `stages/**/*.md` | Engine routing | 33 individual stage definitions |
+| State file | `aidlc-state.md` | Session start + throughout | Persistent workflow state |
+| Audit file | `audit.md` | Throughout execution | Append-only audit trail |
+
+### Loading Sequence
+
+When a user runs `/aidlc feature`:
+
+```
+1.  CLAUDE.md loads              (every conversation)
+1a. statusLine command starts    (settings.json -- runs continuously)
+2.  settings.json loads          (every conversation; all hooks register here, project-wide)
+2a. SessionStart hook fires      (settings.json -- if session resume)
+3.  memory/ rules load            (every conversation)
+4.  SKILL.md activates           (skill invocation -- the conductor)
+5.  Conductor calls the engine   (`aidlc-orchestrate next $ARGUMENTS`)
+6.  Engine reads state + graph   (decides the move, emits a typed directive)
+7.  Conductor acts on directive  (run-stage: load agent .md + knowledge, run the body)
+8.  Stage executes               (stage work)
+9.  Hooks fire as needed         (Claude Code tool calls, compaction, subagent stop)
+10. Conductor reports the outcome (`aidlc-orchestrate report` -- commits state)
+11. Loop back to step 5          (next directive) until the engine emits the final `done`
+```
+
+Steps 1-2a happen for every conversation, even non-AI-DLC ones — and because every hook is registered project-wide in `settings.json` (not on skill activation), the deterministic spine is in place before `/aidlc` is ever invoked; each hook self-gates to a no-op when no workflow is active. Step 3 loads the rule layers. Steps 4 onward set up and drive the workflow only when the user invokes `/aidlc`; steps 5-11 repeat once per directive — the engine, not SKILL.md, decides what each iteration does.
+
+---
+
+## Cross-References
+
+- [Architecture](01-architecture.md) -- 5-layer model including all feature layers
+- [Orchestrator](03-orchestrator.md) -- SKILL.md deep-dive
+- [Agent System](05-agent-system.md) -- agent frontmatter, tool restrictions, agent tiers
+- [Hooks and Tools](06-hooks-and-tools.md) -- hook system, audit taxonomy, CLI tools
+- [Knowledge System](10-knowledge-system.md) -- two-tier knowledge, loading order
+- [Porting to a New Harness](../harness-engineering/09-porting-to-a-new-harness.md) -- how to add a column to the mapping above: the manifest, hook adapter, and `emit.ts` contract
+- [Running on other harnesses](../guide/harnesses/README.md) -- the Kiro CLI, Kiro IDE, Codex, Cursor, opencode, and Copilot expressions of these primitives
