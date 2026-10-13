@@ -101,6 +101,6 @@ export async function prepareKitReview({input,host={},services}){
 /** Compatibility transport; the native host consumes prepareKitReview. */
 export async function serveRequirementsSurveyReview({controllerRoot,sessionPath,port=0}){
   const producer=requirementsReviewProducer({controllerRoot,sessionPath});
-  let api;try{api=await import('@kontourai/survey/review-console');}catch{throw new Error('Optional console requires @kontourai/survey@8.1.0 or a compatible later version');}
-  return api.startReviewConsoleServer({sessionPath:producer.sessionPath,port,producerApply:{binding:producer.binding,apply:producer.apply}});
+  const {serveSurveyReview}=await import('@kontourai/flow-agents/kit-review');
+  return serveSurveyReview({...producer,port});
 }

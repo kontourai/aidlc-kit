@@ -260,7 +260,7 @@ flow-agents kit review aidlc --dest /absolute/aidlc-bootstrap \
   --request /private/requirements-review-request.json
 ```
 
-The Flow Agents release must expose `kit review`, and the installed kit manifest
+Flow Agents 8.1.0 exposes `kit review`, and the installed kit manifest
 must declare the `kontour.kit.review_request@1.0` producer. New use should select
 this native host. The previous `kontour-aidlc review` command remains a
 compatibility interface for existing consumers. Other typed decisions still use
@@ -291,7 +291,7 @@ The same private session can be inspected and updated by Survey's MCP server,
 including its embedded MCP App on compatible hosts:
 
 ```sh
-npx --yes --package=@kontourai/survey@8.1.0 survey-review-mcp \
+npx --yes --package=@kontourai/survey@8.1.1 survey-review-mcp \
   --session /private/controller/survey-reviews/current-session.json
 ```
 
@@ -361,3 +361,5 @@ methods as `services.survey`. This in-memory capability comes from its own
 installed dependency, so a Git-installed producer does not need a redundant
 kit-local Survey installation. It is not accepted from JSON or used as human
 identity. Standalone compatibility hosting retains its optional peer.
+
+The compatibility review command delegates its server lifecycle to the same public Flow Agents `serveSurveyReview` host. Survey 8.1.1 closes active event streams when the review server shuts down; a browser may remain open.
