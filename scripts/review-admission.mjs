@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import {digest,requestBindingDigest} from './compile.mjs';
+import {digest,requestBindingDigest,readSnapshot} from './compile.mjs';
 import {inspectControllerReview} from './authority.mjs';
 import {readArtifact} from './artifacts.mjs';
 
@@ -9,9 +9,10 @@ const read=file=>JSON.parse(fs.readFileSync(file,'utf8'));
 
 /** The host calls this under its controller lock before presentation and again
  * before application. Browser/MCP input supplies neither authority nor budgets. */
-export async function inspectRequirementsReview({controllerRoot,pendingFile}) {
+export async function inspectArtifactReview({controllerRoot,pendingFile}) {
   const input=await inspectControllerReview({controllerRoot,pendingFile});
-  must(input.stage==='requirements-analysis','This review interface handles requirements artifacts only');
+  const stage=readSnapshot().stages.find(stage=>stage.slug===input.stage);
+  must(stage,'Review stage is not declared by the installed methodology');
   const admission=read(path.join(controllerRoot,'request-admission.json'));
   const request=admission.request;
   must(admission.version==='1.0'&&admission.effective_request_digest===input.request_digest&&requestBindingDigest(request)===input.request_digest,'Review execution request is not the retained admitted request');
@@ -25,6 +26,8 @@ export async function inspectRequirementsReview({controllerRoot,pendingFile}) {
   must(Date.now()>=history.started_at&&Date.now()<deadline,'Review execution deadline expired or could not be confirmed');
   must(history.starts.every(start=>Number.isInteger(start.worker?.terminal?.status)&&(start.worker.container_removed===true||start.worker.observed?.execution_profile==='host-native'&&start.worker.engine_outcome==='completed')),'Review requires every started worker to be observed and settled');
   const checkpoint=read(path.join(controllerRoot,'review-checkpoints',`${input.stage}.json`)).checkpoint;
+  const units=checkpoint.prepared.units.filter(unit=>input.unit?unit.id===input.unit:unit.status==='awaiting_decision');
+  must(units.length===1&&units[0].status==='awaiting_decision'&&units[0].continuation?.phase==='review-decision','Local artifact review requires one current review unit; use the signed CLI for a multi-unit aggregate');
   const documents=[];let bytes=0;
   for(const ref of checkpoint.basis){
     const artifact=readArtifact(input.workspace,ref.path);
@@ -35,5 +38,12 @@ export async function inspectRequirementsReview({controllerRoot,pendingFile}) {
   }
   must(documents.length>0,'Review has no observed artifacts');
   must(Date.now()<deadline,'Review execution deadline expired during presentation admission');
-  return {input,documents,basis_digest:digest({input,documents:documents.map(({path,digest})=>({path,digest}))}),budget:{deadline:new Date(deadline).toISOString(),max_workers:execution.max_turns,started_workers:history.starts.length,remaining_workers:execution.max_turns-history.starts.length}};
+  return {input,documents,stage:{id:stage.slug,name:stage.name},unit:structuredClone(units[0]),basis_digest:digest({input,documents:documents.map(({path,digest})=>({path,digest}))}),budget:{deadline:new Date(deadline).toISOString(),max_workers:execution.max_turns,started_workers:history.starts.length,remaining_workers:execution.max_turns-history.starts.length}};
+}
+
+/** Compatibility inspection for consumers that explicitly request requirements. */
+export async function inspectRequirementsReview(options){
+  const admitted=await inspectArtifactReview(options);
+  must(admitted.input.stage==='requirements-analysis','This review interface handles requirements artifacts only');
+  return admitted;
 }
