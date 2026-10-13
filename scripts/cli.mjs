@@ -38,16 +38,16 @@ if(command==='run'){
  const controllerRoot=get('--controller-root'),pendingFile=get('--pending'),reference=get('--reference');
  if(!controllerRoot||!pendingFile||!reference)usage('Usage: kontour-aidlc review --controller-root <private-root> --pending <current-signed-review.json> --reference <host-operator-reference> [--port <port>]');
  const port=get('--port')===null?0:Number(get('--port'));if(!Number.isInteger(port)||port<0||port>65535)usage('Review port must be an integer from 0 to 65535');
- const {createRequirementsSurveyReview,serveRequirementsSurveyReview}=await import('./survey-review.mjs');
- const created=await createRequirementsSurveyReview({controllerRoot,pendingFile,reference});
- const server=await serveRequirementsSurveyReview({controllerRoot,sessionPath:created.sessionFile,port});
+ const {createArtifactSurveyReview,serveArtifactSurveyReview}=await import('./survey-review.mjs');
+ const created=await createArtifactSurveyReview({controllerRoot,pendingFile,reference});
+ const server=await serveArtifactSurveyReview({controllerRoot,sessionPath:created.sessionFile,port});
  console.log(JSON.stringify({...created,url:server.url}));
  const close=()=>server.close().then(()=>process.exit(0));process.once('SIGINT',close);process.once('SIGTERM',close);
 }else if(command==='inspect-review'){
  const controllerRoot=get('--controller-root'),pendingFile=get('--pending');
  if(!controllerRoot||!pendingFile)usage('Usage: kontour-aidlc inspect-review --controller-root <private-root> --pending <current-signed-review.json>');
- const {inspectRequirementsReview}=await import('./review-admission.mjs');
- console.log(JSON.stringify(await withControllerLock(controllerRoot,()=>inspectRequirementsReview({controllerRoot,pendingFile}))));
+ const {inspectArtifactReview}=await import('./review-admission.mjs');
+ console.log(JSON.stringify(await withControllerLock(controllerRoot,()=>inspectArtifactReview({controllerRoot,pendingFile}))));
 }else if(command==='decide'){
  const controllerRoot=get('--controller-root'),pendingFile=get('--pending'),reference=get('--reference');
  if(!controllerRoot||!pendingFile||!reference)usage('Usage: kontour-aidlc decide --controller-root <private-root> --pending <signed-pending.json> --reference <operator-reference> [--decision approve|deny] [--disposition <explicit-disposition.json>]');

@@ -211,7 +211,9 @@ approval or Veritas readiness. Surface derives trust evidence and Flow enforces
 the gate. Veritas retains its own repository standards and evaluation policy;
 shared plumbing does not move those rules into AI-DLC.
 
-## Inspect the current requirements review
+<a id="inspect-the-current-requirements-review"></a>
+
+## Inspect the current artifact review
 
 A host preparing a Survey session can inspect a current produced-artifact review
 without recording a decision:
@@ -221,7 +223,7 @@ kontour-aidlc inspect-review --controller-root /private/controller \
   --pending /private/controller/authority/pending/current-review.json
 ```
 
-This first interface handles `requirements-analysis` review dispositions. It
+This local interface handles signed produced-artifact review dispositions for a single current stage/unit, including intent, requirements and design. It
 refuses questionnaire/input confirmation. It uses the same signed pending-request
 binding as the decision writer, verifies the current Flow visit and sealed review
 checkpoint, and reads the exact current artifact bytes. It also requires the
@@ -231,14 +233,18 @@ unsettled observations. The output includes artifact text/digests and remaining
 worker count/deadline; native upstream provider-request usage is not inferred.
 
 Inspection holds the controller lock, writes no approval and advances no gate.
-A consumer must re-admit the current subject before application. The optional [Survey decision interface](#optional-survey-requirements-decisions)
+The output also identifies the current stage/unit and observed review findings.
+
+A consumer must re-admit the current subject before application. The optional [Survey decision interface](#optional-local-survey-decisions)
 provides presentation and admitted decision application for this subject. Inspection
 alone establishes neither human approval nor semantic correctness.
 
-## Optional Survey requirements decisions
+<a id="optional-survey-requirements-decisions"></a>
+
+## Optional local Survey decisions
 
 Use the native Flow Agents review host with this installed kit. It opens Survey
-and manages the browser/MCP transport; AI-DLC supplies the current requirements
+and manages the browser/MCP transport; AI-DLC supplies the current artifact
 queue and signed decision admission. Write a private review request using the
 current pending file and absolute paths:
 
@@ -250,14 +256,14 @@ current pending file and absolute paths:
   "input": {
     "controllerRoot": "/private/controller",
     "pendingFile": "/private/controller/authority/pending/current-review.json",
-    "reference": "Local operator requirements review"
+    "reference": "Local operator artifact review"
   }
 }
 ```
 
 ```sh
 flow-agents kit review aidlc --dest /absolute/aidlc-bootstrap \
-  --request /private/requirements-review-request.json
+  --request /private/artifact-review-request.json
 ```
 
 Flow Agents 8.1.0 exposes `kit review`, and the installed kit manifest
@@ -277,13 +283,13 @@ action and **Send review to workflow**:
 
 | Action | Controller effect |
 | --- | --- |
-| Approve | Records approval for the exact current requirements basis. Open findings or judgment dissent still require the existing explicit disposition policy. |
-| Decline | Records denial; the requirements remain unapproved. |
+| Approve | Records approval for the exact current artifact basis. Open findings or judgment dissent still require the existing explicit disposition policy. |
+| Decline | Records denial; the artifacts remain unapproved. |
 | Request changes | Requires a correction note. Retains a deterministic operator concern and the original review; a new author and distinct review must fit the existing worker/revision budgets. |
 | Could not confirm | Requires a reason and retains signed feedback. It supplies no approval or denial. |
 
 Artifact acceptance in the workbench is distinct from questionnaire answers.
-This interface handles produced requirements review dispositions and refuses
+This interface handles produced-artifact review dispositions and refuses
 input-confirmation subjects. Artifacts are read-only; edits become correction
 requests rather than writes to canonical model outputs.
 
@@ -363,3 +369,36 @@ kit-local Survey installation. It is not accepted from JSON or used as human
 identity. Standalone compatibility hosting retains its optional peer.
 
 The compatibility review command delegates its server lifecycle to the same public Flow Agents `serveSurveyReview` host. Survey 8.1.1 closes active event streams when the review server shuts down; a browser may remain open.
+
+
+## Local review scope and priorities
+
+Use the local interface when you need to resolve an existing produced-artifact
+proposal: an intent statement, requirements, or a design. It presents exact
+current documents (including their sources and proposed assumptions), observed
+findings, prior operator concerns and dissent. Document acknowledgement records
+inspection; the separate decision records approval, decline or requested changes.
+An open finding still blocks ordinary approval. Request changes carries all
+current open finding IDs and your correction note through the existing signed
+controller, then requires a fresh author/current distinct review and another
+local decision. Merely inspecting a finding does not resolve it.
+
+Survey owns candidate presentation, notes, decisions and session replay. The
+AI-DLC adapter maps that reusable contract to its current domain proposal; Flow
+Agents hosts it and checks installed provenance, and Flow owns advancement. This
+uses Survey's existing producer-neutral resources. It adds no review checkpoint
+to the selected methodology and grants no model execution or deployment itself.
+
+Local use needs no reviewer login. The persisted record describes a local
+operator interaction with the exact artifact basis. Optional authenticated-host
+work and larger comparative benchmarks are deferred. They are not prerequisites
+for local kit use. Existing provider/engine sign-in remains necessary for model
+execution and is separate from local review.
+
+Ordinary questions and mandatory assumption/input confirmations stay on the
+signed CLI input path; this interface cannot answer them by approving an artifact.
+A stage can therefore consume this artifact decision and then ask for its existing
+input confirmation. Multi-unit aggregate review also stays on the signed CLI;
+this slice admits one current unit. Inline changes become explicit correction
+requests, and original deadlines/revision limits remain in force. Expand the UI
+further when actual local usage shows another awkward decision point.
