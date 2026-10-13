@@ -58,3 +58,15 @@ Each command's contract is described in its guide:
 | `node scripts/import-upstream.mjs <pinned-upstream-checkout> [output-directory]` | Re-imports the pinned upstream methodology; see [methodology](methodology.md#reproduce-the-import). |
 | `node scripts/compare.mjs outputs <case.json> <aws-result.json> <kontour-result.json>` | Compares recorded outputs against a frozen rubric; see [comparison ground](README.md#comparison-ground). |
 | `node scripts/capture-run.mjs <case.json> <adapter.json> <workspace> <result.json>` | Captures an adapter run for comparison. |
+
+## Native Flow Agents review
+
+`flow-agents kit review aidlc --dest <installed-bootstrap> --request
+<private-review-request.json> [--port <0..65535>]` opens the optional Survey
+requirements review through the platform's installed-kit host. The request uses
+`kontour.kit.review_request` version `1.0`, kit ID `aidlc`, and `input` containing
+`controllerRoot`, `pendingFile`, and `reference`. See the
+[usage guide](using-the-kit.md#optional-survey-requirements-decisions) for an
+actual request shape, original deadline and decision semantics. The native host
+checks kit integrity; the kit checks current domain admission. `kontour-aidlc
+review` remains a compatibility front door; it does not establish person identity.

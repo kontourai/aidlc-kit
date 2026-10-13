@@ -149,6 +149,11 @@
       "id": "governance-composition",
       "title": "Shared checks and Veritas Governance Kit composition",
       "source": "docs/using-the-kit.md#compose-repository-governance-with-ai-dlc"
+    },
+    {
+      "id": "native-review-producer",
+      "title": "Native Flow Agents kit review and domain admission",
+      "source": "docs/using-the-kit.md#native-review-producer-contract"
     }
   ],
   "exclude": []

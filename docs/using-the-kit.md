@@ -237,17 +237,38 @@ alone establishes neither human approval nor semantic correctness.
 
 ## Optional Survey requirements decisions
 
-Install the optional review interface in the same bootstrap consumer as the kit:
+Use the native Flow Agents review host with this installed kit. It opens Survey
+and manages the browser/MCP transport; AI-DLC supplies the current requirements
+queue and signed decision admission. Write a private review request using the
+current pending file and absolute paths:
 
-```sh
-npm install --save-exact @kontourai/survey@8.1.0
-npm exec -- kontour-aidlc review --controller-root /private/controller \
-  --pending /private/controller/authority/pending/current-review.json \
-  --reference "Local operator requirements review"
+```json
+{
+  "schema": "kontour.kit.review_request",
+  "version": "1.0",
+  "kit_id": "aidlc",
+  "input": {
+    "controllerRoot": "/private/controller",
+    "pendingFile": "/private/controller/authority/pending/current-review.json",
+    "reference": "Local operator requirements review"
+  }
+}
 ```
 
+```sh
+flow-agents kit review aidlc --dest /absolute/aidlc-bootstrap \
+  --request /private/requirements-review-request.json
+```
+
+Flow Agents 8.1.0 exposes `kit review`, and the installed kit manifest
+must declare the `kontour.kit.review_request@1.0` producer. New use should select
+this native host. The previous `kontour-aidlc review` command remains a
+compatibility interface for existing consumers. Other typed decisions still use
+their existing controller formats; visual artifact review does not answer a
+questionnaire.
+
 Use the current pending file returned by the stopped controller. The command
-prints a loopback URL and private `sessionFile`. Open that URL to inspect the
+prints a loopback URL and private `sessionPath`. Open that URL to inspect the
 actual artifact text, source paths and SHA-256 references. The queue shows the
 original deadline and remaining worker slots. It does not renew the deadline.
 
@@ -270,12 +291,13 @@ The same private session can be inspected and updated by Survey's MCP server,
 including its embedded MCP App on compatible hosts:
 
 ```sh
-npx --yes --package=@kontourai/survey@8.1.0 survey-review-mcp \
+npx --yes --package=@kontourai/survey@8.1.1 survey-review-mcp \
   --session /private/controller/survey-reviews/current-session.json
 ```
 
 The MCP tools record review events. Application stays with the host's console
-callback, which rechecks the signed request, current Flow visit, artifact/source
+callback. The native host rechecks installed kit integrity, and the AI-DLC
+producer rechecks the signed request, current Flow visit, artifact/source
 bytes and original execution history before recording a decision under the
 controller lock. Stale, expired, forged or competing submissions refuse.
 A retained signed receipt makes a retry recover the first decision rather than
@@ -287,7 +309,9 @@ A reference string or session actor name does not authenticate a person. An
 application requiring personally authenticated human review must provide that
 identity and authorization through its trusted host; this local adapter does
 not claim it. Command-line/native/Docker execution continues to work with no
-Survey peer installed.
+mandatory kit-local Survey interface. The native Flow Agents host owns its
+Survey dependency; existing standalone compatibility hosting still needs the
+optional Survey peer.
 
 ## Compose repository governance with AI-DLC
 
@@ -316,3 +340,26 @@ Survey's browser, CLI and embedded MCP App are presentation transports over the
 same producer queue. Survey event persistence is separate from host application,
 Flow advancement, human authentication and independent output grading. Choose the
 transport your host supports and preserve those contracts across it.
+
+## Native review producer contract
+
+`kit.json` declares `review.module`, `review.export`, and
+`kontour.kit.review_request@1.0`. The producer validates its domain input and
+returns the private Survey session path, immutable queue binding and host-only
+application callback. Flow Agents loads only the integrity-bound installed
+producer and refuses a changed installation before applying. It never takes an
+application callback or authority assertion from JSON, browser state or MCP.
+
+The AI-DLC producer retains its signed current pending subject, Flow visit,
+artifact/source checks and original worker/deadline budget. This local producer
+rejects authenticated-host resolver capabilities it does not support rather
+than recording a human identity claim. Native hosting changes how a review is
+opened, not the scope of its authority or what can advance the workflow.
+
+The native host supplies the public Survey queue-binding and event-derivation
+methods as `services.survey`. This in-memory capability comes from its own
+installed dependency, so a Git-installed producer does not need a redundant
+kit-local Survey installation. It is not accepted from JSON or used as human
+identity. Standalone compatibility hosting retains its optional peer.
+
+The compatibility review command delegates its server lifecycle to the same public Flow Agents `serveSurveyReview` host. Survey 8.1.1 closes active event streams when the review server shuts down; a browser may remain open.

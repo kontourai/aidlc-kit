@@ -19,9 +19,9 @@ function assertSession(controllerRoot,content){
 }
 
 /** Create an optional presentation over an existing signed wait, not a new process. */
-export async function createRequirementsSurveyReview({controllerRoot,pendingFile,reference}){
+export async function createRequirementsSurveyReview({controllerRoot,pendingFile,reference,surveyApi}){
   must(typeof reference==='string'&&reference.trim()&&reference.length<=512,'Explicit host-observed operator reference required');
-  const api=await survey();
+  const api=surveyApi??await survey();
   return withControllerLock(controllerRoot,async()=>{
     const admitted=await inspectRequirementsReview({controllerRoot,pendingFile});
     must(!findControllerReviewDecision({controllerRoot,pendingFile}),'This current review already has a recorded decision');
@@ -53,8 +53,8 @@ function decisionFor(domain,results){
 }
 
 /** Only server-derived Survey results reach this host-owned application path. */
-async function applyRequirementsSurveyReview({controllerRoot,sessionPath}){
-  const api=await survey();
+async function applyRequirementsSurveyReview({controllerRoot,sessionPath,surveyApi}){
+  const api=surveyApi??await survey();
   return withControllerLock(controllerRoot,async()=>{
     const file=sessionFile(controllerRoot,sessionPath),content=read(file),domain=assertSession(controllerRoot,content);
     const derived=api.deriveReviewSessionApplyResultForSnapshot({snapshot:domain.snapshot,events:content.events,requiredResolvedItems:'all'});
@@ -80,8 +80,27 @@ async function applyRequirementsSurveyReview({controllerRoot,sessionPath}){
   });
 }
 
+function requirementsReviewProducer({controllerRoot,sessionPath,surveyApi}){
+  const file=sessionFile(controllerRoot,sessionPath),content=read(file),domain=assertSession(controllerRoot,content);
+  return {sessionPath:file,binding:domain.binding,apply:()=>applyRequirementsSurveyReview({controllerRoot,sessionPath:file,surveyApi})};
+}
+
+/** Domain producer for the native Flow Agents kit review host. */
+export async function prepareKitReview({input,host={},services}){
+  const fields=['controllerRoot','pendingFile','reference'];
+  must(input&&typeof input==='object'&&!Array.isArray(input),'Review input must be an object');
+  must(Object.keys(input).every(name=>fields.includes(name)),'Unsupported AI-DLC review input; browser and request files do not establish authority');
+  for(const name of fields)must(typeof input[name]==='string'&&input[name].trim()&&input[name].length<=4096,`Review requires a bounded ${name}`);
+  must(host&&typeof host==='object'&&Object.keys(host).length===0,'This requirements producer records local operator decisions; authenticated host authority is not supported');
+  const surveyApi=services?.survey;
+  must(services===undefined||(services&&typeof services==='object'&&Object.keys(services).every(name=>name==='survey')&&typeof surveyApi?.bindReviewQueue==='function'&&typeof surveyApi?.deriveReviewSessionApplyResultForSnapshot==='function'),'Survey services must come from the trusted native host');
+  const created=await createRequirementsSurveyReview({...input,surveyApi});
+  return requirementsReviewProducer({controllerRoot:input.controllerRoot,sessionPath:created.sessionFile,surveyApi});
+}
+
+/** Compatibility transport; the native host consumes prepareKitReview. */
 export async function serveRequirementsSurveyReview({controllerRoot,sessionPath,port=0}){
-  const content=read(sessionFile(controllerRoot,sessionPath)),domain=assertSession(controllerRoot,content);
-  let api;try{api=await import('@kontourai/survey/review-console');}catch{throw new Error('Optional console requires @kontourai/survey@8.1.0 or a compatible later version');}
-  return api.startReviewConsoleServer({sessionPath,port,producerApply:{binding:domain.binding,apply:()=>applyRequirementsSurveyReview({controllerRoot,sessionPath})}});
+  const producer=requirementsReviewProducer({controllerRoot,sessionPath});
+  const {serveSurveyReview}=await import('@kontourai/flow-agents/kit-review');
+  return serveSurveyReview({...producer,port});
 }

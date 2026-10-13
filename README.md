@@ -9,7 +9,7 @@
 [Documentation](https://kontourai.github.io/aidlc-kit/) · [AI-DLC on Flow](https://kontourai.io/use-cases/aidlc/)
 
 For a practical walkthrough of setup, tool responsibilities and ordinary use,
-read [Use the AI-DLC Kit](docs/using-the-kit.md). It includes native setup, signed decisions, optional [Survey requirements review](docs/using-the-kit.md#optional-survey-requirements-decisions), and [Veritas governance composition](docs/using-the-kit.md#compose-repository-governance-with-ai-dlc).
+read [Use the AI-DLC Kit](docs/using-the-kit.md). It includes native setup, signed decisions, native Flow Agents [Survey requirements review](docs/using-the-kit.md#optional-survey-requirements-decisions), and [Veritas governance composition](docs/using-the-kit.md#compose-repository-governance-with-ai-dlc).
 
 The independently maintained AI-DLC methodology kit for Flow Agents. It uses the same public kit installation, activation, Flow gate and host adapter contracts as any other kit. Upstream methodology and license provenance are frozen under `upstream/`.
 
