@@ -35,8 +35,14 @@ async function createCurrentArtifactSurveyReview({controllerRoot,pendingFile,ref
     const items=admitted.documents.map((document,index)=>({apiVersion:'survey.kontourai.io/v1alpha1',kind:'ReviewItem',metadata:{name:`document-${index}`,producer:{displayName:`${admitted.stage.name} review — deadline ${admitted.budget.deadline} — ${admitted.budget.remaining_workers} worker slots remaining`}},spec:{target:`${admitted.stage.name} artifact: ${document.path} (SHA-256 ${document.digest})`,candidates:[{...candidate(`document-${index}:proposed`,document.text,document.path),source:{...candidate(`document-${index}:proposed`,document.text,document.path).source,sourceRef:`workspace-artifact:${document.path}#sha256=${document.digest}`},locator:{scheme:'structured-field',excerpt:document.text}}],editable:false,rationale:'Inspect the current artifact bytes, including proposed assumptions and sources. Accepting this card acknowledges inspection; the separate workflow decision controls approval. Questionnaire answers stay on the existing input path.'}}));
     items.push({apiVersion:'survey.kontourai.io/v1alpha1',kind:'ReviewItem',metadata:{name:'workflow-decision'},spec:{target:`Decision for this exact ${admitted.stage.name} artifact set (unit ${admitted.unit.id})`,candidateSetStatus:'conflict',editable:false,candidates:actions.map(action=>candidate(action,action==='approve'?'Approve this artifact basis':action==='decline'?'Decline this artifact basis':'Request changes — describe the required correction in the note',action)),rationale:`Local operator decision. Original deadline: ${admitted.budget.deadline}. Remaining worker slots: ${admitted.budget.remaining_workers}. Choose one action, or Could not confirm with a reason. Open findings are not waived by inspection or approval; request changes uses their observed IDs.\n\nObserved review context:\n${contextText}`}});
     const snapshot={items,activeItemName:items[0].metadata.name,notesByItemName:{},decisionsByItemName:{},reviewedAt:at,actorId:'host-observed:local-operator'};
+    // Display-only hints; the exact document values, targets and candidate IDs
+    // above remain the signed subject used for replay and decision admission.
+    const presentation={title:`${admitted.stage.name} review`,context:[`Waiting for your decision on ${admitted.documents.length} produced artifact${admitted.documents.length===1?'':'s'}.`,contextText,`Original deadline: ${admitted.budget.deadline}\nRemaining worker slots: ${admitted.budget.remaining_workers}`,`Read each artifact and mark it reviewed, then choose Approve, Request changes or Decline. Request changes requires a correction note. Approval does not resolve open findings. Submitting records your decision; continue the original run separately.`].join('\n\n'),items:Object.fromEntries([
+      ...admitted.documents.map((document,index)=>[`document-${index}`,{title:path.basename(document.path),kind:'acknowledgment'}]),
+      ['workflow-decision',{title:'Your decision',kind:'choice',candidateLabels:{approve:'Approve','request-changes':'Request changes',decline:'Decline'}}],
+    ])};
     const binding=api.bindReviewQueue(snapshot,{sessionName:id});
-    const checkpoint={version:'1.0',kind:'artifact-survey-review',id,stage:admitted.stage,unit:admitted.unit.id,finding_ids:(admitted.unit.findings??[]).filter(finding=>finding.status==='open').map(finding=>finding.id),pendingFile:fs.realpathSync(pendingFile),basis_digest:admitted.basis_digest,reference:`survey-review:${id}:${reference}`,snapshot,binding,budget:admitted.budget};
+    const checkpoint={version:'1.0',kind:'artifact-survey-review',id,stage:admitted.stage,unit:admitted.unit.id,finding_ids:(admitted.unit.findings??[]).filter(finding=>finding.status==='open').map(finding=>finding.id),pendingFile:fs.realpathSync(pendingFile),basis_digest:admitted.basis_digest,reference:`survey-review:${id}:${reference}`,snapshot,binding,presentation,budget:admitted.budget};
     const content={session:{apiVersion:'survey.kontourai.io/v1alpha1',kind:'ReviewSession',metadata:{name:id}},snapshot,events:[],aidlc:{checkpoint,envelope:sealControllerCheckpoint({controllerRoot,checkpoint})}};
     const root=path.join(fs.realpathSync(controllerRoot),'survey-reviews');fs.mkdirSync(root,{recursive:true,mode:0o700});const file=path.join(root,`${id}.json`);
     fs.writeFileSync(file,JSON.stringify(content,null,2)+'\n',{flag:'wx',mode:0o600});
@@ -83,13 +89,14 @@ async function applyArtifactSurveyReview({controllerRoot,sessionPath,surveyApi})
     }
     if(decision.action==='request-changes')must(current.budget.remaining_workers>=2,'Original worker budget cannot admit a new author and distinct reviewer');
     const result=await recordControllerInteraction({controllerRoot,pendingFile:domain.pendingFile,reference:domain.reference,decision:expected,disposition});
-    return {reference:result.reference,summary:decision.action==='approve'?'Approval recorded for this exact artifact basis; continue through the existing controller':decision.action==='decline'?'Decline recorded; these artifacts remain unapproved':'Correction requested; a new author and distinct review are required'};
+    const continuation='Continue with the original flow-agents kit run aidlc request and controller root.';
+    return {reference:result.reference,summary:decision.action==='approve'?`Approval recorded for these exact artifacts. ${continuation}`:decision.action==='decline'?`Decline recorded; these artifacts remain unapproved. ${continuation}`:`Changes requested. ${continuation} A new author and distinct review are required before another decision.`};
   });
 }
 
 function artifactReviewProducer({controllerRoot,sessionPath,surveyApi}){
   const file=sessionFile(controllerRoot,sessionPath),content=read(file),domain=assertSession(controllerRoot,content);
-  return {sessionPath:file,binding:domain.binding,apply:()=>applyArtifactSurveyReview({controllerRoot,sessionPath:file,surveyApi})};
+  return {sessionPath:file,binding:domain.binding,...(domain.presentation?{presentation:structuredClone(domain.presentation)}:{}),apply:()=>applyArtifactSurveyReview({controllerRoot,sessionPath:file,surveyApi})};
 }
 
 /** Domain producer for the native Flow Agents kit review host. */

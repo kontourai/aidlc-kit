@@ -278,8 +278,17 @@ prints a loopback URL and private `sessionPath`. Open that URL to inspect the
 actual artifact text, source paths and SHA-256 references. The queue shows the
 original deadline and remaining worker slots. It does not renew the deadline.
 
-Accept each artifact card after inspection, then choose the separate workflow
-action and **Send review to workflow**:
+The review summary shows why the run is waiting, the current unit, observed
+findings and dissent, and the original deadline and remaining worker slots.
+Artifact cards use short filenames; their exact source paths, SHA-256 references
+and bytes remain available for inspection.
+
+Read each artifact and select **Mark reviewed**. This acknowledges inspection;
+it does not approve the artifacts. Under **Your decision**, select **Approve**,
+**Request changes** or **Decline**, and enter a correction note for Request
+changes. **Could not confirm** remains available with a reason. Then use the
+single **Send review to workflow** button. Submission waits for all items to be
+decided and their events to be saved:
 
 | Action | Controller effect |
 | --- | --- |
@@ -307,8 +316,18 @@ producer rechecks the signed request, current Flow visit, artifact/source
 bytes and original execution history before recording a decision under the
 controller lock. Stale, expired, forged or competing submissions refuse.
 A retained signed receipt makes a retry recover the first decision rather than
-write another. Continue through the existing `flow-agents kit run aidlc` entry;
-this console does not execute a model, restart the run, or bypass Flow gates.
+write another. The recorded result remains visible after reloading the console.
+After submission, return to the terminal and continue the original request with
+the same bootstrap and controller root:
+
+```sh
+flow-agents kit run aidlc --dest /absolute/aidlc-bootstrap \
+  --request /private/original-execution-request.json \
+  --controller-root /private/controller
+```
+
+This console records the decision; the run command consumes it and resumes
+through Flow. The console does not execute a model or restart the run.
 
 Local browser/MCP interactions are **host-observed operator interactions**.
 A reference string or session actor name does not authenticate a person. An
@@ -369,6 +388,13 @@ kit-local Survey installation. It is not accepted from JSON or used as human
 identity. Standalone compatibility hosting retains its optional peer.
 
 The compatibility review command delegates its server lifecycle to the same public Flow Agents `serveSurveyReview` host. Survey 8.1.1 closes active event streams when the review server shuts down; a browser may remain open.
+
+The producer also returns optional display-only `presentation` data. Survey
+renders its queue title, visible review context, artifact acknowledgments and
+action labels; Flow Agents passes those hints to its native host. Canonical
+ReviewItems, candidate IDs, artifact bytes and signed admission rules remain the
+decision basis. The AI-DLC controller seals its presentation alongside that
+basis so editing the retained context cannot create a different producer review.
 
 
 ## Local review scope and priorities

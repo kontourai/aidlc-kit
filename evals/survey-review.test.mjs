@@ -12,7 +12,7 @@ async function review(t,action,note='',options={}){
   const f=await currentRequirementsReviewFixture(t,options);
   const producer=await prepareKitReview({input:{controllerRoot:f.controllerRoot,pendingFile:f.pendingFile,reference:'Controlled local operator fixture'}});
   const created={sessionFile:producer.sessionPath};
-  const server=await startReviewConsoleServer({sessionPath:producer.sessionPath,producerApply:{binding:producer.binding,apply:producer.apply}});
+  const server=await startReviewConsoleServer({sessionPath:producer.sessionPath,presentation:producer.presentation,producerApply:{binding:producer.binding,apply:producer.apply}});
   t.after(()=>server.close());
   const initial=JSON.parse(fs.readFileSync(created.sessionFile));
   const decisions=Object.fromEntries(initial.snapshot.items.map(item=>[item.metadata.name,item.metadata.name==='workflow-decision'?(action==='could-not-confirm'?'could-not-confirm':'select-proposed'):'accept-proposed']));
@@ -21,7 +21,7 @@ async function review(t,action,note='',options={}){
   const get=async()=>await (await fetch(`${server.url}api/session`)).json();
   const post=async(route,body)=>await fetch(`${server.url}api/${route}`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
   const saved=await post('events',{baseRevision:(await get()).revision,events});assert.equal(saved.status,200,JSON.stringify(await saved.json()));
-  return {...f,...created,server,get,post,initial,apply:async()=>post('apply',{baseRevision:(await get()).revision})};
+  return {...f,...created,server,get,post,initial,producer,apply:async()=>post('apply',{baseRevision:(await get()).revision})};
 }
 const decisions=root=>fs.readdirSync(path.join(root,'authority')).filter(name=>name.endsWith('.json')&&!name.endsWith('.input.json')).map(name=>JSON.parse(fs.readFileSync(path.join(root,'authority',name)))).filter(record=>record.payload?.kind==='controller-decision');
 
@@ -104,6 +104,9 @@ test('local design findings remain observed concerns and require fresh author an
  const finding={id:'DESIGN-1',severity:'medium',reason:'The proposed domain model omits an explicitly required entity',kind:'judgment',status:'open'};
  const f=await review(t,'request-changes','Include the required entity in the domain model',{stage:'domain-design',findings:[finding]});
  assert.ok(f.initial.snapshot.items.at(-1).spec.rationale.includes(finding.reason));
+ assert.ok(f.producer.presentation.context.includes(finding.reason));
+ assert.ok(f.producer.presentation.context.includes('open'));
+ assert.equal(f.producer.presentation.items['workflow-decision'].kind,'choice');
  assert.equal((await f.apply()).status,200);
  const recorded=decisions(f.controllerRoot)[0];
  assert.deepEqual(recorded.payload.disposition.review_disposition.units[0].finding_ids,['DESIGN-1']);
@@ -127,6 +130,35 @@ test('local design findings remain observed concerns and require fresh author an
  assert.equal((await f.resume()).status,'completed');
  assert.equal(decisions(f.controllerRoot).length,2);
  assert.deepEqual(f.executions.map(x=>x.phase),['inline','review','revise','review']);
+});
+
+test('review presentation exposes the wait and findings without changing artifact identity or action values',async t=>{
+ const f=await review(t,'approve','',{stage:'domain-design'});
+ const {presentation}=f.producer;
+ assert.equal(presentation.title,'Domain Design review');
+ assert.ok(presentation.context.includes('Waiting for your decision'));
+ assert.ok(presentation.context.includes(f.initial.aidlc.checkpoint.budget.deadline));
+ assert.deepEqual(presentation.items['workflow-decision'].candidateLabels,{approve:'Approve','request-changes':'Request changes',decline:'Decline'});
+ for(const item of f.initial.snapshot.items.filter(item=>item.metadata.name!=='workflow-decision')){
+   assert.equal(presentation.items[item.metadata.name].kind,'acknowledgment');
+   assert.ok(!presentation.items[item.metadata.name].title.includes('SHA-256'));
+   assert.ok(item.spec.target.includes('SHA-256'));
+   assert.ok(item.spec.candidates[0].source.sourceRef.includes('#sha256='));
+ }
+ assert.deepEqual((await f.get()).presentation,presentation);
+ assert.equal((await f.apply()).status,200);
+ const summary=(await f.get()).producerApplication.summary;
+ assert.ok(summary.includes('Approval recorded'));
+ assert.ok(summary.includes('original flow-agents kit run aidlc request'));
+});
+
+test('editing retained presentation cannot hide findings behind a new producer binding',async t=>{
+ const f=await review(t,'approve','',{stage:'domain-design'});
+ const content=JSON.parse(fs.readFileSync(f.sessionFile));
+ content.aidlc.checkpoint.presentation.context='Nothing to review';
+ fs.writeFileSync(f.sessionFile,JSON.stringify(content));
+ assert.equal((await f.apply()).status,409);
+ assert.equal(decisions(f.controllerRoot).length,0);
 });
 
 test('accepting a design card cannot waive an open observed finding',async t=>{
