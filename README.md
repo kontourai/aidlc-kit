@@ -45,7 +45,7 @@ npm run test:package
 
 Package-install verification packs this repository and performs a clean npm installation outside its source tree. It validates and activates the installed kit through the public Flow Agents CLI and exercises the packaged public Flow/Surface contracts. Live model equivalence is a separate measurement; no synthetic package check proves effectiveness.
 
-Documentation is published to <https://kontourai.github.io/aidlc-kit/> with docs-kit. `docs-kit.json` lists the published docs and the topics served to agents, and `npm run docs:check` is the gate. When you change code that a document `covers`, update that document.
+Documentation is published to <https://kontourai.github.io/aidlc-kit/> with Corpus. `corpus.json` lists the published docs and the topics served to agents, and `npm run docs:check` is the gate. When you change code that a document `covers`, update that document.
 
 See [execution](docs/execution.md) and [methodology](docs/methodology.md) for controller, authority and evidence boundaries.
 

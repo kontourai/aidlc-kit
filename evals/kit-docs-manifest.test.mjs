@@ -4,7 +4,7 @@ import {readFileSync} from 'node:fs';
 import {generatedFiles,readSnapshot} from '@kontourai/aidlc-kit/compile';
 
 const read=relative=>JSON.parse(readFileSync(new URL(`../${relative}`,import.meta.url),'utf8'));
-const published=read('docs-kit.json').documents.map(document=>document.source);
+const published=read('corpus.json').documents.map(document=>document.source);
 
 test('the generated kit manifest advertises every published document and the parity ledger',()=>{
  const advertised=JSON.parse(generatedFiles(readSnapshot()).get('kit.json')).docs.map(entry=>entry.path);
