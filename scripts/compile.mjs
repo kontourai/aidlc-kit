@@ -75,7 +75,7 @@ function stageSkill(stage) {
 }
 
 // Every document the package ships under docs/ is advertised, so a new guide cannot be left out of the
-// installed manifest. Derived from the directory rather than docs-kit.json because docs-kit.json is not
+// installed manifest. Derived from the directory rather than corpus.json because corpus.json is not
 // part of the published package and the installed `check` command regenerates this list.
 export function shippedDocs(root = KIT_ROOT) {
   return readdirSync(join(root, 'docs')).filter((name) => /\.(md|json)$/.test(name)).sort().map((name) => `docs/${name}`);
