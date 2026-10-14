@@ -1,5 +1,33 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
+  "purpose": "Execute the pinned AI-DLC methodology with stage artifacts, approvals, and inspectable evidence.",
+  "builtOn": [
+    {
+      "product": "flow",
+      "via": "@kontourai/flow",
+      "for": "Validate workflows and gate stage advancement with attached evidence."
+    },
+    {
+      "product": "flow-agents",
+      "via": "@kontourai/flow-agents",
+      "for": "Execute kit workers, broker provider access, and host artifact reviews."
+    },
+    {
+      "product": "plumb",
+      "via": "@kontourai/plumb",
+      "for": "Observe and summarize required check results."
+    },
+    {
+      "product": "surface",
+      "via": "@kontourai/surface",
+      "for": "Validate evidence bundles and derive trust reports."
+    },
+    {
+      "product": "survey",
+      "via": "@kontourai/survey",
+      "for": "Collect local artifact and findings review decisions."
+    }
+  ],
   "product": "aidlc-kit",
   "title": "AI-DLC Kit",
   "tagline": "The pinned AWS AI-DLC methodology, run as a Flow Agents kit on Flow gates and Surface evidence",
