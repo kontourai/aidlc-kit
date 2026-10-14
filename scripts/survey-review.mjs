@@ -9,7 +9,7 @@ import {withControllerLock} from './controller-lock.mjs';
 const must=(condition,message)=>{if(!condition)throw new Error(message);};
 const read=file=>JSON.parse(fs.readFileSync(file,'utf8'));
 const actions=['approve','request-changes','decline'];
-async function survey(){try{return await import('@kontourai/survey/review-workbench');}catch{throw new Error('Optional review requires @kontourai/survey@8.1.0 or a compatible later version');}}
+async function survey(){try{return await import('@kontourai/survey/review-workbench');}catch{throw new Error('Optional review requires @kontourai/survey@8.2.0 or a compatible later version');}}
 function sessionFile(controllerRoot,file){const root=fs.realpathSync(path.join(controllerRoot,'survey-reviews')),real=fs.realpathSync(file);must(path.dirname(real)===root,'Review must be a retained private Survey session');return real;}
 function assertSession(controllerRoot,content){
   const domain=content.aidlc?.checkpoint;

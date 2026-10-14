@@ -306,7 +306,7 @@ The same private session can be inspected and updated by Survey's MCP server,
 including its embedded MCP App on compatible hosts:
 
 ```sh
-npx --yes --package=@kontourai/survey@8.1.1 survey-review-mcp \
+npx --yes --package=@kontourai/survey@8.2.0 survey-review-mcp \
   --session /private/controller/survey-reviews/current-session.json
 ```
 
@@ -389,7 +389,8 @@ identity. Standalone compatibility hosting retains its optional peer.
 
 The compatibility review command delegates its server lifecycle to the same public Flow Agents `serveSurveyReview` host. Survey 8.1.1 closes active event streams when the review server shuts down; a browser may remain open.
 
-The producer also returns optional display-only `presentation` data. Survey
+Survey 8.2.0 supports the optional display-only `presentation` data returned
+by the producer. Survey
 renders its queue title, visible review context, artifact acknowledgments and
 action labels; Flow Agents passes those hints to its native host. Canonical
 ReviewItems, candidate IDs, artifact bytes and signed admission rules remain the

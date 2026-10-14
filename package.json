@@ -46,10 +46,10 @@
     "kontour-aidlc": "scripts/cli.mjs"
   },
   "devDependencies": {
-    "@kontourai/survey": "8.1.1"
+    "@kontourai/survey": "8.2.0"
   },
   "peerDependencies": {
-    "@kontourai/survey": ">=8.1.1 <9"
+    "@kontourai/survey": ">=8.2.0 <9"
   },
   "peerDependenciesMeta": {
     "@kontourai/survey": {
