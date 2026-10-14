@@ -268,7 +268,9 @@ flow-agents kit review aidlc --dest /absolute/aidlc-bootstrap \
 
 Flow Agents 8.1.0 exposes `kit review`, and the installed kit manifest
 must declare the `kontour.kit.review_request@1.0` producer. New use should select
-this native host. The previous `kontour-aidlc review` command remains a
+this native host. The contextual interface described below also requires a host
+that forwards the producer's `presentation`; use the runtime pinned by this kit.
+The previous `kontour-aidlc review` command remains a
 compatibility interface for existing consumers. Other typed decisions still use
 their existing controller formats; visual artifact review does not answer a
 questionnaire.
