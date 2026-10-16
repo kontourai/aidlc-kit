@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
-import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync,lstatSync,realpathSync} from 'node:fs';
+import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync,lstatSync,realpathSync,copyFileSync} from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -28,6 +28,8 @@ test('npm tarball installs away from source and activates through public kit con
   command([process.execPath,'--test','evals/dispatch-checkpoints.test.mjs','evals/review-request-changes.test.mjs','evals/stage-level-construction.test.mjs'],kit);
   const cli=path.join(consumer,'node_modules/@kontourai/flow-agents/build/src/cli.js');const workspace=consumer;
   command([process.execPath,cli,'kit','install',kit,'--dest',workspace],consumer);
+  const reviewProof=path.join(consumer,'installed-review-proof.mjs');copyFileSync(path.join(root,'test/installed-review-proof.mjs'),reviewProof);
+  const review=JSON.parse(command([process.execPath,reviewProof,consumer,scratch],consumer));assert.equal(review.status,'pass');assert.equal(review.presentation_forwarded,true);assert.equal(review.unresolved_submission_refused,true);assert.equal(review.model_or_provider_invoked,false);
   command([process.execPath,'--input-type=module','-e',"await import('@kontourai/flow-agents/engine-host');await import('@kontourai/flow-agents/kit-setup');await import('@kontourai/flow-agents/kit-activation');"],consumer);
   const application=path.join(scratch,'application');mkdirSync(application);
   writeFileSync(path.join(application,'README.md'),'Application source stays separate from the runtime bootstrap.\n');

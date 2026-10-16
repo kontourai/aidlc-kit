@@ -7,7 +7,7 @@ Use the ordinary Flow Agents CLI to run this installed kit. Read docs/environmen
 
 Create the request with flow-agents kit setup aidlc, check it with flow-agents kit doctor, then execute flow-agents kit run aidlc with that request and private controller root. Keep the request unchanged when resuming. The default authority is interactive and grants nothing automatically.
 
-For a current produced-artifact review (such as intent, requirements or design), open Survey with flow-agents kit review aidlc --dest <bootstrap> --request <private-review-request.json>, using this kit's declared review producer. Survey hosting does not authenticate a person or renew execution budgets.
+For a current produced-artifact review (such as intent, requirements or design), open Survey with flow-agents kit review aidlc --dest <bootstrap> --request <private-review-request.json>, using this kit's declared review producer. Show the visible findings and review context; the operator marks artifacts reviewed, chooses a workflow action and sends the review once. After the decision is recorded, resume the original run request separately. Survey hosting does not authenticate a person or renew execution budgets.
 
 When execution waits, show the actual pending subject and findings to the operator. Use the installed kit's scripts/cli.mjs decisions and decide commands to record their explicit answers or disposition, then resume the same request. Never supply an answer, approval, finding waiver, or request for changes on the operator's behalf. Control choices require the exact declared strings.
 
