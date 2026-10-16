@@ -266,10 +266,10 @@ flow-agents kit review aidlc --dest /absolute/aidlc-bootstrap \
   --request /private/artifact-review-request.json
 ```
 
-Flow Agents 8.1.0 exposes `kit review`, and the installed kit manifest
-must declare the `kontour.kit.review_request@1.0` producer. New use should select
-this native host. The contextual interface described below also requires a host
-that forwards the producer's `presentation`; use the runtime pinned by this kit.
+This kit pins Flow Agents 9.0.0, which exposes `kit review` and forwards the
+producer's contextual `presentation`. The installed kit manifest must declare
+the `kontour.kit.review_request@1.0` producer. New use should select this native
+host and the runtime pinned by this kit.
 The previous `kontour-aidlc review` command remains a
 compatibility interface for existing consumers. Other typed decisions still use
 their existing controller formats; visual artifact review does not answer a
@@ -389,7 +389,7 @@ installed dependency, so a Git-installed producer does not need a redundant
 kit-local Survey installation. It is not accepted from JSON or used as human
 identity. Standalone compatibility hosting retains its optional peer.
 
-The compatibility review command delegates its server lifecycle to the same public Flow Agents `serveSurveyReview` host. Survey 8.1.1 closes active event streams when the review server shuts down; a browser may remain open.
+The compatibility review command delegates its server lifecycle to the same public Flow Agents `serveSurveyReview` host. Survey closes active event streams when the review server shuts down; a browser may remain open.
 
 Survey 8.2.0 supports the optional display-only `presentation` data returned
 by the producer. Survey
