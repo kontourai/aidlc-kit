@@ -44,7 +44,7 @@ function currentRefs(workspace,refs){return refs.flatMap(ref=>{try{const value=r
 function observationBundle({runId,stage,kind,status,record,now,invalid=false}){
   const claimId=`${stage}-${kind}`;const passing=status==='pass';
   const evidenceType=kind==='review'?'runtime_observation':'test_output';
-  return {schemaVersion:5,source:'kontour/aidlc-runtime;statusFunctionVersion=3',
+  return {schemaVersion:5,source:'kontour/aidlc-runtime;statusFunctionVersion=4',
     claims:[{id:claimId,subjectType:'flow-step',subjectId:`${runId}/${stage}`,facet:'quality',claimType:`aidlc.${stage}-${kind}`,fieldOrBehavior:`Observed AI-DLC ${kind} for ${stage}`,value:passing,createdAt:now,updatedAt:now,verificationPolicyId:'observed-policy',metadata:{workflow_subject_ref:runId,record_digest:digest(record)}}],
     evidence:[{id:'observation',claimId,evidenceType,method:'validation',sourceRef:`sha256:${digest(record)}`,excerptOrSummary:'Runtime-observed bytes, checks and execution receipts; semantic correctness is independently graded.',observedAt:now,collectedBy:'aidlc-runtime',passing}],
     events:[{id:'observed',claimId,status:passing?'verified':'disputed',actor:'aidlc-runtime',method:'validation',evidenceIds:['observation'],createdAt:now,verifiedAt:now},...(invalid?[{id:'invalidated',claimId,type:'invalidation',status:'stale',actor:'aidlc-runtime',method:'validation',evidenceIds:[],createdAt:new Date(Date.parse(now)+1).toISOString()}]:[])],

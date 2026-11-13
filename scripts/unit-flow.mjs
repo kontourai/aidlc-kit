@@ -14,7 +14,7 @@ const safe = value => typeof value==='string'&&/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127
 /** Host observation vocabulary; Surface derives the status, Flow evaluates it. */
 export function unitObservationBundle({runId,parentRunId,stage,unitId,record,passing,invalid=false,now=new Date().toISOString()}) {
   const claimId=`${unitId}-completion`,type='test_output';
-  return {schemaVersion:5,source:'kontour/aidlc-unit-flow;statusFunctionVersion=3',
+  return {schemaVersion:5,source:'kontour/aidlc-unit-flow;statusFunctionVersion=4',
     claims:[{id:claimId,subjectType:'flow-step',subjectId:`${runId}/${unitId}`,facet:'quality',claimType:'aidlc.unit-completion',fieldOrBehavior:`Observed unit execution ${stage}/${unitId}`,value:passing,createdAt:now,updatedAt:now,verificationPolicyId:'observed-unit-policy',metadata:{workflow_subject_ref:runId,parent_run_id:parentRunId,stage,record_digest:digest(record)}}],
     evidence:[{id:'unit-observation',claimId,evidenceType:type,method:'validation',sourceRef:`sha256:${digest(record)}`,excerptOrSummary:'Host-observed current unit basis and independently captured execution receipts. Parent stage sensors remain separate.',observedAt:now,collectedBy:'aidlc-unit-controller',passing}],
     events:[{id:'unit-observed',claimId,status:passing?'verified':'disputed',actor:'aidlc-unit-controller',method:'validation',evidenceIds:['unit-observation'],createdAt:now,verifiedAt:now},...(invalid?[{id:'unit-invalidated',claimId,type:'invalidation',status:'stale',actor:'aidlc-unit-controller',method:'validation',evidenceIds:[],createdAt:new Date(Date.parse(now)+1).toISOString()}]:[])],

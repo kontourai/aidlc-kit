@@ -20,7 +20,7 @@ test('npm tarball installs away from source and activates through public kit con
   const manifest=JSON.parse(readFileSync(path.join(kit,'package.json'),'utf8'));
   assert.deepEqual(manifest.bin,{'kontour-aidlc':'scripts/cli.mjs'});
   assert.match(command([path.join(consumer,'node_modules/.bin/kontour-aidlc'),'--help'],consumer),/kontour-aidlc profiles/);
-  assert.equal(manifest.dependencies['@kontourai/flow'],'5.2.0');assert.equal(manifest.dependencies['@kontourai/surface'],'5.0.0');
+  assert.equal(manifest.dependencies['@kontourai/flow-agents'],'11.0.0');assert.equal(manifest.dependencies['@kontourai/flow'],'6.0.0');assert.equal(manifest.dependencies['@kontourai/surface'],'6.3.0');
   command([process.execPath,'scripts/cli.mjs','profiles'],kit);
   command([process.execPath,'--input-type=module','-e',"await import('@kontourai/flow-agents/docker-worker');await import('@kontourai/flow-agents/provider-broker');"],consumer);
   command([process.execPath,'scripts/compile.mjs','--check'],kit);
@@ -38,7 +38,13 @@ test('npm tarball installs away from source and activates through public kit con
   const setup=spawnSync(process.execPath,[cli,'kit','setup','aidlc','--dest',workspace,'--workspace',application,'--controller-root',path.join(scratch,'setup-private'),'--engine','codex','--model','package-proof-model','--auth','native','--allow-host-execution','--prompt','Package setup proof only','--dry-run'],{cwd:consumer,encoding:'utf8'});
   assert.ok([0,1].includes(setup.status),setup.stderr);
   const preview=JSON.parse(setup.stdout);assert.equal(preview.dry_run,true);assert.equal(preview.request.host_setup.auth.mode,'native');assert.equal(preview.request.host_setup.host_access_granted,true);assert.equal(preview.request.workspace,realpathSync(application));
-  assert.ok(Array.isArray(preview.checks)); // Availability is observed, never assumed to imply login or a live workflow.
+  assert.ok(Array.isArray(preview.checks));
+  assert.equal(setup.status,preview.checks.some(check=>check.status==='FAIL')?1:0);
+  const doctorRequest=path.join(scratch,'doctor-request.json');writeFileSync(doctorRequest,JSON.stringify(preview.request));
+  const doctor=spawnSync(process.execPath,[cli,'kit','doctor','--request',doctorRequest],{cwd:consumer,encoding:'utf8'});
+  const diagnosis=JSON.parse(doctor.stdout);assert.ok(Array.isArray(diagnosis.checks));
+  assert.equal(doctor.status,diagnosis.checks.some(check=>check.status==='FAIL')?1:0,doctor.stderr);
+  // Availability is observed, never assumed to imply login or a live workflow.
   const activation=JSON.parse(command([process.execPath,cli,'kit','activate','--dest',workspace,'--format','json'],consumer));
   const recomposition=JSON.parse(command([process.execPath,path.join(root,'test/installed-recomposition-proof.mjs'),consumer,scratch],consumer));assert.equal(recomposition.status,'pass');assert.equal(recomposition.model_or_provider_invoked,false);
   for(const mode of ['input-source','input-artifact','recomputed-input']){const proof=JSON.parse(command([process.execPath,path.join(root,'test/installed-recomposition-proof.mjs'),consumer,scratch,mode],consumer));assert.equal(proof.status,'pass');assert.equal(proof.mode,mode);}

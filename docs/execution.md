@@ -10,7 +10,7 @@ Maintain a run-owned artifact index with `{id,stage,path}` entries. Artifact ids
 
 These functions provide structural observations only. `semantic_status` and unexecuted sensors remain `not_verified`. Do not turn structural success into the compiled completion claim, which also demands applicable checks. An adapter must run those checks, preserve their actual verdicts, publish revision- and subject-bound evidence through Surface, attach it through Flow/Flow Agents, then let Flow evaluate the gate.
 
-The lifecycle conductor reobserves artifact bytes before each gate visit and submits direct/transitive invalidations through Surface and Flow. Completed off-cursor reappraisal exposed a defect in published Flow 5.1.3; the installed-package integration regressions now consume the released Flow 5.1.4 repair. Independent branches retain their current evidence.
+The lifecycle conductor reobserves artifact bytes before each gate visit and submits direct/transitive invalidations through Surface and Flow. Completed off-cursor reappraisal exposed a defect in published Flow 5.1.3; the repair shipped in Flow 5.1.4 and remains covered against the current pinned runtime. Independent branches retain their current evidence.
 
 ## Review, human decisions and operations
 
@@ -188,3 +188,60 @@ storage inspector counts hidden paths and orphan files, and projected inputs
 remain within worker quotas. No turn, attempt or deadline budget is reset.
 Native history files are verified before and after work; trusted-host execution
 still does not provide OS filesystem or credential confinement.
+
+
+## Flow Agents 11 consumer migration
+
+The runtime pins move together: Flow Agents **11.0.0**, Flow **6.0.0** and
+Surface **6.3.0**. Surface 5 cannot re-derive the status-function-4 bundles
+written by Flow Agents 11. New AI-DLC observation bundles now stamp
+`statusFunctionVersion=4` as well. Schema version 5 remains valid for this
+observation vocabulary; a status function version is a separate contract from
+bundle schema version. Retained bundles keep their original stamp; this change
+does not rewrite historical evidence or manufacture approvals.
+
+The producer audit is:
+
+| Producer | Verification contract |
+| --- | --- |
+| `runtime.mjs` completion observations (stage artifacts, methodology sensors, project tests, aggregate construction) | `observed-policy` requires `test_output`; the evidence records the actual aggregate `passing` boolean. |
+| `runtime.mjs` review observations | `observed-policy` requires `runtime_observation`; the evidence records the current review result as `passing`. |
+| `unit-flow.mjs` child unit completion | `observed-unit-policy` requires `test_output` with the host-observed `passing` result. Canonical claim settlement and current basis checks remain required. |
+| Signed operator decisions and sealed controller checkpoints | Controller authority records, not Surface verification claims. Signature, current subject, source/artifact basis, deadline and budget checks remain mandatory; an operator decision alone does not verify a stage. |
+| `survey-review.mjs` candidate `claimTarget` metadata | Review observation proposals, not verified gate evidence. The producer applies the admitted action through the signed controller protocol; candidate inspection and actor labels do not establish human authentication. |
+| `public-flow-conformance.mjs` synthetic fixture | Explicit policy and pass/fail check result; never model or operator qualification. |
+
+`evals/flow-6-producers.test.mjs` exercises both real bundle producers through
+persisted Flow gates. Completion, review and unit observations must verify;
+removing the policy or passing result, failing a check, or invalidating the
+observation must block. A missing-passing mutation of the unit producer was
+executed and detected (`proposed` instead of `verified`), then restored and
+retested. Existing runtime/sensor and signed decision suites cover the upstream
+observations and checkpoint admission separately.
+
+The public `kit install`, `activate`, `setup`, `run`, `review` and `doctor`
+interfaces remain supported. The clean package-install test exercises install,
+activation, setup preview, installed execution/resume, Docker export loading,
+and native review presentation plus refusal of unresolved submissions.
+`kit.json` continues to declare `kontour.kit.review_request@1.0`: the producer
+returns `sessionPath`, `binding`, `presentation` and a host-only `apply` callback.
+Flow Agents 11 still supplies `services.survey` and rechecks installed integrity
+before application. Its native Survey 9 service is exercised by the installed
+review proof; the optional standalone Survey 8 peer remains separately tested.
+
+AI-DLC does not call Builder's clean-critique gate or use `FLOW_AGENTS_ACTOR`
+relabelling. Its dispatcher requires distinct host-admitted author/reviewer
+identities and instances. Native review invokes a fresh engine CLI process;
+Docker review invokes a separate worker. The admission session ID is a host
+invocation identity; the provider thread ID is retained separately in the worker
+receipt. These tests do not prove live engine session behavior or model quality.
+Kit authors using Builder must use a separate runtime reviewer session; an
+in-session Claude subagent or renamed actor cannot satisfy Builder 11.
+
+Flow 6 also changes run-output certification and the attachment reducer identity
+to 2.0.0, and adds `specific_reason` / `surface_gaps`. AI-DLC uses public Flow
+attachment and gate APIs, does not pin an internal reducer, and does not produce
+run-output certifications. Diagnostics are retained rather than replaced with a
+locally inferred pass. Do not loosen accepted statuses, replay under an older
+status function to bypass missing requirements, or rewrite old evidence to
+claim a new verification.
