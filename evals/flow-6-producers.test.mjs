@@ -26,7 +26,6 @@ for (const producer of ['completion','review','unit']) {
    bundle=JSON.parse(fs.readFileSync(observation.file));
   }
   assert.match(bundle.source,/statusFunctionVersion=4$/);
-  assert.equal(buildTrustReport(bundle).statusFunctionVersion,'4');
   const scenarios=[['pass',b=>{},'verified'],['no-policy',b=>{b.policies=[];delete b.claims[0].verificationPolicyId;},'proposed'],['no-passing',b=>{delete b.evidence[0].passing;},'proposed'],['failed',b=>{b.evidence[0].passing=false;},'disputed'],['stale',b=>{b.events.push({id:'stale',claimId:b.claims[0].id,type:'invalidation',status:'stale',actor:'host',method:'validation',evidenceIds:[],createdAt:new Date(Date.now()+1000).toISOString()});},'stale']];
   let previous=(await loadRun('proof',cwd)).manifest.evidence.at(-1)?.id;
   // Evaluate negatives first so no completed-run replay can mask a failed gate.

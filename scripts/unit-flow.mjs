@@ -11,10 +11,13 @@ const digest = value => createHash('sha256').update(JSON.stringify(value)).diges
 const write = (file,value) => {fs.mkdirSync(path.dirname(file),{recursive:true,mode:0o700});const temp=`${file}.${randomUUID()}.tmp`;fs.writeFileSync(temp,JSON.stringify(value)+'\n',{flag:'wx',mode:0o600});fs.renameSync(temp,file);};
 const safe = value => typeof value==='string'&&/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(value);
 
+/** One status-function version for the bundle stamp and its derivation, so they cannot diverge. */
+export const UNIT_STATUS_FUNCTION_VERSION='4';
+
 /** Host observation vocabulary; Surface derives the status, Flow evaluates it. */
 export function unitObservationBundle({runId,parentRunId,stage,unitId,record,passing,invalid=false,now=new Date().toISOString()}) {
   const claimId=`${unitId}-completion`,type='test_output';
-  return {schemaVersion:5,source:'kontour/aidlc-unit-flow;statusFunctionVersion=4',
+  return {schemaVersion:5,source:`kontour/aidlc-unit-flow;statusFunctionVersion=${UNIT_STATUS_FUNCTION_VERSION}`,
     claims:[{id:claimId,subjectType:'flow-step',subjectId:`${runId}/${unitId}`,facet:'quality',claimType:'aidlc.unit-completion',fieldOrBehavior:`Observed unit execution ${stage}/${unitId}`,value:passing,createdAt:now,updatedAt:now,verificationPolicyId:'observed-unit-policy',metadata:{workflow_subject_ref:runId,parent_run_id:parentRunId,stage,record_digest:digest(record)}}],
     evidence:[{id:'unit-observation',claimId,evidenceType:type,method:'validation',sourceRef:`sha256:${digest(record)}`,excerptOrSummary:'Host-observed current unit basis and independently captured execution receipts. Parent stage sensors remain separate.',observedAt:now,collectedBy:'aidlc-unit-controller',passing}],
     events:[{id:'unit-observed',claimId,status:passing?'verified':'disputed',actor:'aidlc-unit-controller',method:'validation',evidenceIds:['unit-observation'],createdAt:now,verifiedAt:now},...(invalid?[{id:'unit-invalidated',claimId,type:'invalidation',status:'stale',actor:'aidlc-unit-controller',method:'validation',evidenceIds:[],createdAt:new Date(Date.parse(now)+1).toISOString()}]:[])],
@@ -70,7 +73,7 @@ export async function createUnitFlow({controllerRoot,parentRunId,stage,units,act
   async function attach(unitId,record,passing,{invalid=false,supersede}={}) {
     const bundle=unitObservationBundle({runId,parentRunId,stage:stage.slug,unitId,record,passing,invalid});
     const valid=validateTrustBundle(bundle);
-    const report=buildTrustReport(bundle,{now:invalid?new Date(Date.now()+5):new Date()});
+    const report=buildTrustReport(bundle,{now:invalid?new Date(Date.now()+5):new Date(),statusFunctionVersion:UNIT_STATUS_FUNCTION_VERSION});
     const file=path.join(files,'observations',`${unitId}-${randomUUID()}.json`);write(file,valid);
     const entry=await attachEvidence(runId,{cwd:controllerRoot,gate:`${unitId}-gate`,file,kind:'trust.bundle',producer:'aidlc-unit-controller',...(supersede?{supersede}: {})});
     return {id:entry.id,file,status:report.claims[0].status,record_digest:digest(record)};

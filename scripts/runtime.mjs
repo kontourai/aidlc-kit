@@ -41,10 +41,13 @@ export function artifactPaths(stage, unit=null) {
 
 function currentRefs(workspace,refs){return refs.flatMap(ref=>{try{const value=readArtifact(workspace,ref.path);return [{...ref,digest:value.digest}];}catch{return [];}});}
 
+/** One status-function version for the bundle stamp and its derivation, so they cannot diverge. */
+export const OBSERVATION_STATUS_FUNCTION_VERSION='4';
+
 function observationBundle({runId,stage,kind,status,record,now,invalid=false}){
   const claimId=`${stage}-${kind}`;const passing=status==='pass';
   const evidenceType=kind==='review'?'runtime_observation':'test_output';
-  return {schemaVersion:5,source:'kontour/aidlc-runtime;statusFunctionVersion=4',
+  return {schemaVersion:5,source:`kontour/aidlc-runtime;statusFunctionVersion=${OBSERVATION_STATUS_FUNCTION_VERSION}`,
     claims:[{id:claimId,subjectType:'flow-step',subjectId:`${runId}/${stage}`,facet:'quality',claimType:`aidlc.${stage}-${kind}`,fieldOrBehavior:`Observed AI-DLC ${kind} for ${stage}`,value:passing,createdAt:now,updatedAt:now,verificationPolicyId:'observed-policy',metadata:{workflow_subject_ref:runId,record_digest:digest(record)}}],
     evidence:[{id:'observation',claimId,evidenceType,method:'validation',sourceRef:`sha256:${digest(record)}`,excerptOrSummary:'Runtime-observed bytes, checks and execution receipts; semantic correctness is independently graded.',observedAt:now,collectedBy:'aidlc-runtime',passing}],
     events:[{id:'observed',claimId,status:passing?'verified':'disputed',actor:'aidlc-runtime',method:'validation',evidenceIds:['observation'],createdAt:now,verifiedAt:now},...(invalid?[{id:'invalidated',claimId,type:'invalidation',status:'stale',actor:'aidlc-runtime',method:'validation',evidenceIds:[],createdAt:new Date(Date.parse(now)+1).toISOString()}]:[])],
@@ -57,7 +60,7 @@ export async function attachObservation({controllerRoot,runId,stage,kind='comple
   validateTrustBundle(bundle);
   const observationId=randomUUID();const recordFile=path.join(controllerRoot,'observations',`${stage}-${kind}-${observationId}.record.json`);write(recordFile,record);
   const file=path.join(controllerRoot,'observations',`${stage}-${kind}-${observationId}.json`);write(file,bundle);
-  const report=buildTrustReport(bundle,{now:new Date(Date.parse(now)+(invalid?2:0))});
+  const report=buildTrustReport(bundle,{now:new Date(Date.parse(now)+(invalid?2:0)),statusFunctionVersion:OBSERVATION_STATUS_FUNCTION_VERSION});
   const evidence=await attachEvidence(runId,{cwd:controllerRoot,gate:`${stage}-gate`,file,kind:'trust.bundle',...(supersede?{supersede}:{}),producer:'aidlc-runtime'});
   return {evidence_id:evidence.id,file,record_file:recordFile,record_digest:digest(record),status:report.claims?.[0]?.status??null};
 }
