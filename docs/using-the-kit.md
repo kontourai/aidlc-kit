@@ -266,10 +266,12 @@ flow-agents kit review aidlc --dest /absolute/aidlc-bootstrap \
   --request /private/artifact-review-request.json
 ```
 
-This kit pins Flow Agents 9.0.0, which exposes `kit review` and forwards the
+This kit pins Flow Agents 11.0.0, which exposes `kit review` and forwards the
 producer's contextual `presentation`. The installed kit manifest must declare
 the `kontour.kit.review_request@1.0` producer. New use should select this native
-host and the runtime pinned by this kit.
+host and the runtime pinned by this kit. Flow 6.0.0 and Surface 6.3.0 move with
+Flow Agents 11; see [consumer migration notes](execution.md#flow-agents-11-consumer-migration)
+for claim policies, status-function stamps and reviewer session boundaries.
 The previous `kontour-aidlc review` command remains a
 compatibility interface for existing consumers. Other typed decisions still use
 their existing controller formats; visual artifact review does not answer a

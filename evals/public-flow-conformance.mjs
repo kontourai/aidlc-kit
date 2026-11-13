@@ -49,7 +49,7 @@ export async function runPublicFlowConformance() {
   };
   function bundle({ passing = true, stale = false, subject = currentSubject } = {}) {
     return {
-      schemaVersion: 5, source: "aidlc/synthetic-public-contract-fixtures;statusFunctionVersion=3",
+      schemaVersion: 5, source: "aidlc/synthetic-public-contract-fixtures;statusFunctionVersion=4",
       claims: [{
         id: "claim", subjectType: "artifact", subjectId: subject, facet: "quality",
         claimType: "aidlc.fixture.check", fieldOrBehavior: "Synthetic artifact check passes",
